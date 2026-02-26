@@ -152,10 +152,10 @@ ChatViewModel.handleStreamingChunk(chunk):
 ```
 TerminalScreen
   │
-  ├── bootstrapInstalled == false
+  ├── rootfsInstalled == false
   │   └── 显示 "请先完成安装" 提示
   │
-  └── bootstrapInstalled == true
+  └── rootfsInstalled == true
       └── EmbeddedTerminalView
           │
           └── AndroidView(factory = {
@@ -170,9 +170,10 @@ TerminalScreen
 **TerminalViewModel 职责：**
 
 1. **创建 PTY 会话**：`TerminalSession(shellPath, cwd, args, env, transcriptRows, sessionClient)`
-   - `shellPath` = `$PREFIX/bin/bash`
-   - `cwd` = `$HOME`
-   - `env` = 完整 Linux 环境变量数组
+   - `shellPath` = proot 二进制路径（`libproot.so`）
+   - `args` = proot 参数 + `/usr/bin/bash --login`
+   - `cwd` = filesDir
+   - `env` = proot 环境变量数组
    - `transcriptRows` = 5000（回滚缓冲区行数）
 
 2. **实现 TerminalSessionClient**：处理文本变更、标题变更、剪贴板、光标样式等回调
@@ -194,7 +195,7 @@ DEVICE_CHECK
   │ "Continue" / "Continue Anyway"
   ▼
 DOWNLOAD
-  │ 下载 + 解压 bootstrap
+  │ 下载 + 解压 Debian rootfs
   │ 进度条 + MB 计数器
   ▼
 API_KEY

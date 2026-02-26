@@ -16,7 +16,7 @@
 │  └────────────────┬─────────────────────────────┘   │
 │                   │ WebSocket ws://127.0.0.1:18789  │
 │  ┌────────────────┴─────────────────────────────┐   │
-│  │      内嵌 Linux 环境 (Termux 库)              │   │
+│  │      proot + Debian Linux 环境                │   │
 │  │      Node.js 22+ → OpenClaw Gateway          │   │
 │  └──────────────────────────────────────────────┘   │
 └──────────────────────────────────────────────────────┘
@@ -25,7 +25,7 @@
             Claude / GPT / Gemini
 ```
 
-- **全部本地运行** — OpenClaw Gateway 以 Node.js 子进程运行在 app 私有目录中
+- **完整 Linux 环境** — 通过 proot 运行完整 Debian，支持 apt 安装任意软件包
 - **原生聊天界面** — Compose 构建，支持流式消息渲染、工具审批对话框
 - **内嵌终端** — 集成 Termux 的 terminal-view，提供真实 PTY bash 会话
 - **后台常驻** — Foreground Service + WakeLock，支持开机自启
@@ -53,7 +53,7 @@ APK 产出：`app/build/outputs/apk/debug/app-debug.apk`
 ### 首次运行
 
 1. 在 Android 7+ 设备上安装 APK（推荐 8GB+ RAM）
-2. 安装向导自动下载 Linux 运行环境（~300MB）
+2. 安装向导自动下载 Debian Linux 环境（~300MB rootfs）
 3. 输入 AI 提供商的 API Key（Anthropic / OpenAI / Google）
 4. 开始对话
 
@@ -66,7 +66,7 @@ APK 产出：`app/build/outputs/apk/debug/app-debug.apk`
 | 终端 Tab | 真实 PTY 终端，直接访问内嵌 Linux 环境 |
 | 后台运行 | Foreground Service 保活，开机自启（可关闭） |
 | 进程管理 | 指数退避自动重启、健康检查、崩溃恢复 |
-| 首次向导 | 设备检测、Bootstrap 下载进度、API Key 配置 |
+| 首次向导 | 设备检测、Debian rootfs 下载进度、API Key 配置 |
 | Material You | Android 12+ 动态配色，完整 Dark Mode 支持 |
 
 ## 技术栈
@@ -87,7 +87,7 @@ APK 产出：`app/build/outputs/apk/debug/app-debug.apk`
 ```
 app/src/main/kotlin/com/openclaw/android/
 ├── core/          # 常量、路径管理
-├── bootstrap/     # Linux 环境下载、解压、配置
+├── proot/         # proot 执行器、Debian rootfs 安装与管理
 ├── service/       # 前台服务、进程管理、健康检查
 ├── gateway/       # OpenClaw WebSocket 协议客户端
 ├── data/          # 数据模型、DataStore 持久化
@@ -112,7 +112,7 @@ app/src/main/kotlin/com/openclaw/android/
 |------|------|
 | [系统架构总览](docs/00-architecture-overview.md) | 五层架构、设计决策、数据流全景、技术栈 |
 | [项目结构与构建系统](docs/01-project-structure.md) | 目录结构、Gradle 配置、Manifest、构建命令 |
-| [内嵌 Linux 环境](docs/02-bootstrap-linux-environment.md) | Bootstrap 下载/解压流程、文件系统布局、环境变量 |
+| [内嵌 Linux 环境](docs/02-bootstrap-linux-environment.md) | proot + Debian rootfs 安装流程、文件系统布局 |
 | [服务与进程生命周期](docs/03-service-process-lifecycle.md) | Foreground Service、进程状态机、指数退避重启 |
 | [Gateway WebSocket 协议](docs/04-gateway-protocol.md) | 协议 v3 帧格式、握手时序、方法/事件清单 |
 | [UI 架构与状态管理](docs/05-ui-architecture.md) | Compose 导航、ViewModel 架构、消息气泡设计 |
@@ -126,11 +126,14 @@ app/src/main/kotlin/com/openclaw/android/
 
 ## 关键设计决策
 
+**为什么用 proot + Debian？**
+通过 proot（用户空间的 ptrace 路径重映射工具）运行完整 Debian rootfs，AI Agent 可使用 apt 安装任意 Linux 工具（git、python、make 等），提供真正的完整 Linux 环境而非受限的定制运行时。
+
 **为什么 `targetSdk = 28`？**
-Android 10+ 引入 W^X 限制，禁止从 app 数据目录执行二进制。`targetSdk = 28` 绕过此限制，使 Node.js/bash 等预编译二进制可以直接运行。仅适用于 sideload 分发。
+Android 10+ 引入 W^X 限制，禁止从 app 数据目录执行二进制。`targetSdk = 28` 绕过此限制，使 proot 及 rootfs 中的二进制可以正常执行。仅适用于 sideload 分发。
 
 **为什么不需要安装 Termux？**
-Termux 的 `terminal-emulator` 和 `terminal-view` 以 JitPack 依赖编译进 APK，不依赖外部应用。Linux 运行环境通过 Bootstrap 压缩包首次运行时下载。
+Termux 的 `terminal-emulator` 和 `terminal-view` 以 JitPack 依赖编译进 APK，不依赖外部应用。Linux 运行环境通过 Debian rootfs 压缩包首次运行时下载。
 
 **为什么用 WebSocket 而不是直接调用？**
 复用 OpenClaw 标准的 Gateway Protocol v3，Android 端作为 `operator` 角色通过 `ws://127.0.0.1:18789` 本地回环连接。这种方式保持了与 OpenClaw 生态的兼容性，未来可以无缝切换为远程 Gateway。

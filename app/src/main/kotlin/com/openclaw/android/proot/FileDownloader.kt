@@ -1,4 +1,4 @@
-package com.openclaw.android.bootstrap
+package com.openclaw.android.proot
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ensureActive
@@ -9,10 +9,10 @@ import java.io.File
 import java.io.IOException
 
 /**
- * Downloads the bootstrap archive from a remote URL (typically GitHub Releases).
- * Reports granular progress for the UI progress bar.
+ * Downloads a file from a remote URL with granular progress reporting.
+ * Used to fetch the Debian rootfs archive during first-run setup.
  */
-class BootstrapDownloader(private val httpClient: OkHttpClient) {
+class FileDownloader(private val httpClient: OkHttpClient) {
 
     data class Progress(
         val bytesDownloaded: Long,
@@ -24,6 +24,7 @@ class BootstrapDownloader(private val httpClient: OkHttpClient) {
 
     /**
      * Downloads [url] to [destination], calling [onProgress] periodically.
+     * Writes to a temporary file first and atomically renames on success.
      * @throws IOException on network or filesystem errors
      */
     suspend fun download(

@@ -65,17 +65,19 @@ startGateway()
   │
   ├── state = Starting
   │
-  ├── 构建命令:
-  │   [/data/.../usr/bin/node,
-  │    /data/.../usr/lib/node_modules/openclaw/bin/openclaw.js,
-  │    gateway,
-  │    --port, 18789,
-  │    --bind, 127.0.0.1]
+  ├── 构建 proot 命令:
+  │   [libproot.so,
+  │    --rootfs, /data/.../files/rootfs,
+  │    --bind, /dev, --bind, /proc, --bind, /sys,
+  │    --link2symlink, -0, --cwd, /root,
+  │    /usr/bin/node,
+  │    /usr/lib/node_modules/openclaw/bin/openclaw.js,
+  │    gateway, --port, 18789, --bind, 127.0.0.1]
   │
-  ├── ProcessBuilder
-  │   ├── .directory(home)              ← 工作目录 = $HOME
-  │   ├── .redirectErrorStream(true)    ← stderr 合并到 stdout
-  │   └── .environment() = buildEnvironment()  ← 完整 Linux 环境变量
+  ├── ProcessBuilder (由 ProotExecutor 构建)
+  │   ├── .directory(filesDir)           ← 工作目录
+  │   ├── .redirectErrorStream(true)     ← stderr 合并到 stdout
+  │   └── .environment() = prootExecutor.buildEnvironment()
   │
   ├── process.start()
   │
@@ -163,7 +165,7 @@ Stopped ──► Starting ──► Running
 ```
 BOOT_COMPLETED 广播
   │
-  ├── Bootstrap 未安装? → 跳过
+  ├── Rootfs 未安装? → 跳过
   ├── 后台模式未启用? → 跳过
   │
   └── 启动 OpenClawService
@@ -203,14 +205,10 @@ context.startService(OpenClawService.stopIntent(context))
 `ProcessManager.createShellSession()` 为终端 Tab 创建独立的 bash 会话：
 
 ```kotlin
-val process = ProcessBuilder(paths.shellBinary.absolutePath, "--login")
-    .directory(paths.home)           // 工作目录 = $HOME
-    .redirectErrorStream(true)       // stderr → stdout
-    .also { pb ->
-        pb.environment().clear()
-        pb.environment().putAll(environmentSetup.buildEnvironment())
-    }
-    .start()
+val process = prootExecutor.executeShell()
+// 内部构建:
+// proot --rootfs=... --bind=/dev --bind=/proc --bind=/sys
+//       --link2symlink -0 --cwd=/root /usr/bin/bash --login
 ```
 
-这个 `Process` 对象被 `TerminalViewModel` 包装为 Termux 的 `TerminalSession`，后者管理 PTY（伪终端）和 VT100 终端仿真。
+这个 `Process` 对象被 `TerminalViewModel` 包装为 Termux 的 `TerminalSession`，后者管理 PTY（伪终端）和 VT100 终端仿真。在 proot 内部，bash 运行在完整的 Debian 环境中，可以使用 apt 安装软件包。

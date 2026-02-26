@@ -8,7 +8,7 @@
 |------|------|-----------|-------------|
 | **00** | [系统架构总览](00-architecture-overview.md) | 五层架构、技术栈、数据流全景 | **最先阅读** |
 | **01** | [项目结构与构建系统](01-project-structure.md) | 目录结构、Gradle 配置、AndroidManifest | 搭环境时阅读 |
-| **02** | [内嵌 Linux 环境](02-bootstrap-linux-environment.md) | Bootstrap 下载/解压/验证的完整流程 | 理解核心机制时阅读 |
+| **02** | [内嵌 Linux 环境](02-bootstrap-linux-environment.md) | proot + Debian rootfs 安装/配置/验证流程 | 理解核心机制时阅读 |
 | **03** | [服务与进程生命周期](03-service-process-lifecycle.md) | Foreground Service、进程管理、健康检查 | 理解后台运行时阅读 |
 | **04** | [Gateway WebSocket 协议](04-gateway-protocol.md) | 协议 v3 帧格式、握手、方法、事件 | 对接 OpenClaw 时阅读 |
 | **05** | [UI 架构与状态管理](05-ui-architecture.md) | Compose 导航、ViewModel、消息气泡设计 | 开发 UI 时阅读 |

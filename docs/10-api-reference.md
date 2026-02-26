@@ -30,31 +30,30 @@
 | Gateway | `GATEWAY_PORT` | `18789` |
 | Gateway | `GATEWAY_WS_URL` | `"ws://127.0.0.1:18789/"` |
 | Gateway | `GATEWAY_PROTOCOL_VERSION` | `3` |
-| Bootstrap | `BOOTSTRAP_FILE_NAME` | `"bootstrap-aarch64.tar.gz"` |
-| Process | `NODE_BINARY` | `"bin/node"` |
-| Process | `OPENCLAW_ENTRY` | `"lib/node_modules/openclaw/bin/openclaw.js"` |
-| Process | `SHELL_BINARY` | `"bin/bash"` |
+| Rootfs | `ROOTFS_FILE_NAME` | `"rootfs-aarch64.tar.xz"` |
+| Inner paths | `INNER_NODE_BINARY` | `"/usr/bin/node"` |
+| Inner paths | `INNER_OPENCLAW_ENTRY` | `"/usr/lib/node_modules/openclaw/bin/openclaw.js"` |
+| Inner paths | `INNER_SHELL_BINARY` | `"/usr/bin/bash"` |
+| Inner paths | `INNER_HOME` | `"/root"` |
 | Service | `HEALTH_CHECK_INTERVAL_MS` | `15000` |
 | Service | `PROCESS_RESTART_MAX_RETRIES` | `5` |
 | Service | `PROCESS_RESTART_BASE_DELAY_MS` | `2000` |
 
 ### OpenClawConstants.Paths
 - **类型:** `class`（需要 `filesDir: File` 参数）
-- **职责:** 根据 app 数据目录派生所有文件路径
+- **职责:** 根据 app 数据目录派生所有文件路径（proot 架构）
 
 | 属性 | 相对路径 | 说明 |
 |------|----------|------|
-| `root` | `files/` | 根目录 |
-| `prefix` | `files/usr/` | $PREFIX |
-| `home` | `files/home/` | $HOME |
-| `bin` | `files/usr/bin/` | 二进制 |
-| `lib` | `files/usr/lib/` | 库文件 |
-| `tmp` | `files/usr/tmp/` | 临时 |
-| `nodeBinary` | `files/usr/bin/node` | Node.js |
-| `openclawEntry` | `files/usr/lib/node_modules/openclaw/bin/openclaw.js` | OpenClaw |
-| `shellBinary` | `files/usr/bin/bash` | Shell |
-| `openclawConfig` | `files/home/.openclaw/` | 配置 |
-| `openclawData` | `files/home/.openclaw/data/` | 数据 |
+| `root` | `files/` | App 文件根目录 |
+| `rootfs` | `files/rootfs/` | Debian rootfs (proot --rootfs) |
+| `prootTmp` | `files/proot-tmp/` | proot 临时目录 |
+| `hostNodeBinary` | `files/rootfs/usr/bin/node` | Node.js (host 路径) |
+| `hostShellBinary` | `files/rootfs/usr/bin/bash` | Shell (host 路径) |
+| `hostOpenclawEntry` | `files/rootfs/usr/lib/node_modules/openclaw/bin/openclaw.js` | OpenClaw (host 路径) |
+| `hostInnerHome` | `files/rootfs/root` | /root (host 路径) |
+| `hostOpenclawConfig` | `files/rootfs/root/.openclaw/` | 配置 |
+| `hostOpenclawData` | `files/rootfs/root/.openclaw/data/` | 数据 |
 
 - **方法:** `ensureDirectories()` — 创建所有必需目录
 
@@ -79,7 +78,7 @@
 
 | Flow 属性 | 类型 | 说明 |
 |-----------|------|------|
-| `isBootstrapInstalled` | `Flow<Boolean>` | Bootstrap 是否安装 |
+| `isRootfsInstalled` | `Flow<Boolean>` | Rootfs 是否安装 |
 | `isGatewayAutostart` | `Flow<Boolean>` | 是否自动启动 Gateway |
 | `isBackgroundEnabled` | `Flow<Boolean>` | 是否启用后台模式 |
 | `anthropicApiKey` | `Flow<String>` | Anthropic API key |
@@ -90,14 +89,14 @@
 
 | 同步方法 | 返回值 | 使用场景 |
 |----------|--------|----------|
-| `isBootstrapInstalledSync()` | Boolean | Service / BroadcastReceiver |
+| `isRootfsInstalledSync()` | Boolean | Service / BroadcastReceiver |
 | `isBackgroundEnabledSync()` | Boolean | BroadcastReceiver |
 
 ---
 
-## `com.openclaw.android.bootstrap`
+## `com.openclaw.android.proot`
 
-### BootstrapState (sealed interface)
+### RootfsState (sealed interface)
 
 | 子类型 | 属性 | 说明 |
 |--------|------|------|
@@ -106,30 +105,34 @@
 | `Downloading` | `progress: Float`, `bytesDownloaded: Long`, `totalBytes: Long` | 下载中 |
 | `Extracting` | `progress: Float` | 解压中 |
 | `Configuring` | — | 配置中 |
+| `Verifying` | — | 验证中 |
 | `Installed` | — | 已安装 |
 | `Error` | `message: String`, `cause: Throwable?` | 错误 |
 
-### BootstrapInstaller
+### RootfsInstaller
 
 | 成员 | 类型 | 说明 |
 |------|------|------|
-| `state` | `StateFlow<BootstrapState>` | 安装状态 |
-| `isInstalled()` | Boolean | 快速检查 node + bash 是否存在 |
+| `state` | `StateFlow<RootfsState>` | 安装状态 |
+| `isInstalled()` | Boolean | 快速检查 node + bash + openclaw 是否存在 |
 | `install(url, force)` | suspend | 执行完整安装流程 |
 
-### BootstrapDownloader
+### FileDownloader
 
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `download` | `suspend (url, destination, onProgress) → File` | HTTP 下载，报告进度 |
 
-### EnvironmentSetup
+### ProotExecutor
 
-| 方法 | 返回值 | 说明 |
-|------|--------|------|
-| `buildEnvironment()` | `Map<String, String>` | 完整环境变量映射 |
-| `ensureEnvironment()` | Unit | 创建目录 + profile 脚本 |
-| `verifyInstallation()` | `VerificationResult` | 检查关键二进制 |
+| 成员 | 类型 | 说明 |
+|------|------|------|
+| `prootBinaryPath` | `String` | proot 二进制路径 (`nativeLibraryDir/libproot.so`) |
+| `isAvailable()` | Boolean | 检查 proot 二进制是否存在 |
+| `buildCommand(innerCommand, cwd)` | `List<String>` | 构建完整 proot 命令行 |
+| `buildEnvironment()` | `Map<String, String>` | proot 宿主进程环境变量 |
+| `execute(innerCommand, cwd)` | `Process` | 构建并启动 proot 进程 |
+| `executeShell()` | `Process` | 启动 proot 包装的 bash 会话 |
 
 ---
 
@@ -220,7 +223,7 @@
 
 ### BootReceiver
 - **触发条件:** `ACTION_BOOT_COMPLETED`
-- **行为:** 检查 bootstrap + background 设置，满足则启动 Service
+- **行为:** 检查 rootfs + background 设置，满足则启动 Service
 
 ---
 
@@ -232,8 +235,8 @@
 |-----------|----------|---------------|
 | `MainViewModel` | `PreferencesManager` | (仅暴露 preferencesManager) |
 | `ChatViewModel` | `GatewayClient` | `messages`, `connectionState`, `isLoading`, `pendingApproval` |
-| `TerminalViewModel` | `Context`, `BootstrapInstaller`, `Paths`, `EnvironmentSetup` | `bootstrapInstalled`, `fontSize`, `sessionTitle` |
-| `SetupViewModel` | `Context`, `BootstrapInstaller`, `PreferencesManager` | `currentStep`, `bootstrapState`, `deviceCheck` |
+| `TerminalViewModel` | `Context`, `ProotExecutor`, `RootfsInstaller`, `Paths` | `rootfsInstalled`, `fontSize`, `sessionTitle` |
+| `SetupViewModel` | `Context`, `RootfsInstaller`, `PreferencesManager` | `currentStep`, `rootfsState`, `deviceCheck` |
 | `SettingsViewModel` | `PreferencesManager`, `ProcessManager` | `processState`, `backgroundEnabled`, `anthropicKey`, `openaiKey` |
 
 ### Composable 汇总

@@ -9,9 +9,9 @@ import android.os.StatFs
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.openclaw.android.BuildConfig
-import com.openclaw.android.bootstrap.BootstrapInstaller
-import com.openclaw.android.bootstrap.BootstrapState
 import com.openclaw.android.data.PreferencesManager
+import com.openclaw.android.proot.RootfsInstaller
+import com.openclaw.android.proot.RootfsState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -23,14 +23,14 @@ import javax.inject.Inject
 @HiltViewModel
 class SetupViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val bootstrapInstaller: BootstrapInstaller,
+    private val rootfsInstaller: RootfsInstaller,
     private val preferencesManager: PreferencesManager,
 ) : ViewModel() {
 
     private val _currentStep = MutableStateFlow(SetupStep.WELCOME)
     val currentStep: StateFlow<SetupStep> = _currentStep.asStateFlow()
 
-    val bootstrapState: StateFlow<BootstrapState> = bootstrapInstaller.state
+    val rootfsState: StateFlow<RootfsState> = rootfsInstaller.state
 
     private val _deviceCheck = MutableStateFlow(DeviceCheck())
     val deviceCheck: StateFlow<DeviceCheck> = _deviceCheck.asStateFlow()
@@ -51,7 +51,7 @@ class SetupViewModel @Inject constructor(
 
     fun startInstallation() {
         viewModelScope.launch {
-            bootstrapInstaller.install(BuildConfig.BOOTSTRAP_URL)
+            rootfsInstaller.install(BuildConfig.ROOTFS_URL)
         }
     }
 
@@ -92,7 +92,7 @@ class SetupViewModel @Inject constructor(
             freeStorageMb = freeStorageMb,
             networkOk = networkOk,
             ramOk = totalRamMb >= 4096,
-            storageOk = freeStorageMb >= 2048,
+            storageOk = freeStorageMb >= 3072,
         )
     }
 

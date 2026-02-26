@@ -25,8 +25,8 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) return
 
-        if (!preferencesManager.isBootstrapInstalledSync()) {
-            Log.i(TAG, "Bootstrap not installed, skipping auto-start")
+        if (!preferencesManager.isRootfsInstalledSync()) {
+            Log.i(TAG, "Rootfs not installed, skipping auto-start")
             return
         }
 

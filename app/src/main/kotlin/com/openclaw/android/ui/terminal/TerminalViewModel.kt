@@ -7,9 +7,9 @@ import android.util.Log
 import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.lifecycle.ViewModel
-import com.openclaw.android.bootstrap.BootstrapInstaller
-import com.openclaw.android.bootstrap.EnvironmentSetup
 import com.openclaw.android.core.OpenClawConstants
+import com.openclaw.android.proot.ProotExecutor
+import com.openclaw.android.proot.RootfsInstaller
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
@@ -25,9 +25,9 @@ import javax.inject.Inject
 @HiltViewModel
 class TerminalViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
-    private val bootstrapInstaller: BootstrapInstaller,
+    private val rootfsInstaller: RootfsInstaller,
     private val paths: OpenClawConstants.Paths,
-    private val environmentSetup: EnvironmentSetup,
+    private val prootExecutor: ProotExecutor,
 ) : ViewModel() {
 
     companion object {
@@ -36,8 +36,8 @@ class TerminalViewModel @Inject constructor(
         private const val TRANSCRIPT_ROWS = 5000
     }
 
-    private val _bootstrapInstalled = MutableStateFlow(bootstrapInstaller.isInstalled())
-    val bootstrapInstalled: StateFlow<Boolean> = _bootstrapInstalled.asStateFlow()
+    private val _rootfsInstalled = MutableStateFlow(rootfsInstaller.isInstalled())
+    val rootfsInstalled: StateFlow<Boolean> = _rootfsInstalled.asStateFlow()
 
     private val _fontSize = MutableStateFlow(DEFAULT_FONT_SIZE)
     val fontSize: StateFlow<Int> = _fontSize.asStateFlow()
@@ -98,9 +98,7 @@ class TerminalViewModel @Inject constructor(
             return scale
         }
 
-        override fun onSingleTapUp(e: MotionEvent) {
-            // Show keyboard on tap — handled by the Compose integration
-        }
+        override fun onSingleTapUp(e: MotionEvent) {}
 
         override fun shouldBackButtonBeMappedToEscape() = false
         override fun shouldEnforceCharBasedInput() = true
@@ -130,21 +128,22 @@ class TerminalViewModel @Inject constructor(
     }
 
     /**
-     * Creates a new TerminalSession backed by a real PTY + shell process
-     * running inside the embedded Linux environment.
+     * Creates a new TerminalSession running an interactive shell inside proot.
+     * The shell process is: proot --rootfs=<rootfs> /usr/bin/bash --login
      */
     fun createSession(): TerminalSession {
         terminalSession?.finishIfRunning()
 
-        val env = environmentSetup.buildEnvironment()
+        val prootCommand = prootExecutor.buildCommand(
+            listOf(OpenClawConstants.INNER_SHELL_BINARY, "--login")
+        )
+        val env = prootExecutor.buildEnvironment()
         val envArray = env.entries.map { "${it.key}=${it.value}" }.toTypedArray()
-        val shellPath = paths.shellBinary.absolutePath
-        val cwd = paths.home.absolutePath
 
         val session = TerminalSession(
-            shellPath,
-            cwd,
-            arrayOf(shellPath, "--login"),
+            prootExecutor.prootBinaryPath,
+            paths.root.absolutePath,
+            prootCommand.toTypedArray(),
             envArray,
             TRANSCRIPT_ROWS,
             sessionClient,

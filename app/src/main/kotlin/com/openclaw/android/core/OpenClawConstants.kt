@@ -3,7 +3,7 @@ package com.openclaw.android.core
 import java.io.File
 
 /**
- * Central constants for the embedded Linux environment and OpenClaw gateway.
+ * Central constants for the proot-based Linux environment and OpenClaw gateway.
  * All filesystem paths are derived from the app's private data directory at runtime.
  */
 object OpenClawConstants {
@@ -17,14 +17,15 @@ object OpenClawConstants {
     val GATEWAY_WS_URL get() = "ws://$GATEWAY_HOST:$GATEWAY_PORT$GATEWAY_WS_PATH"
     const val GATEWAY_PROTOCOL_VERSION = 3
 
-    // --- Bootstrap ---
-    const val BOOTSTRAP_FILE_NAME = "bootstrap-aarch64.tar.gz"
-    const val BOOTSTRAP_VERSION = "0.1.0"
+    // --- Rootfs ---
+    const val ROOTFS_FILE_NAME = "rootfs-aarch64.tar.xz"
+    const val ROOTFS_VERSION = "0.1.0"
 
-    // --- Process ---
-    const val NODE_BINARY = "bin/node"
-    const val OPENCLAW_ENTRY = "lib/node_modules/openclaw/bin/openclaw.js"
-    const val SHELL_BINARY = "bin/bash"
+    // --- Inner paths (as seen by processes inside proot) ---
+    const val INNER_NODE_BINARY = "/usr/bin/node"
+    const val INNER_OPENCLAW_ENTRY = "/usr/lib/node_modules/openclaw/bin/openclaw.js"
+    const val INNER_SHELL_BINARY = "/usr/bin/bash"
+    const val INNER_HOME = "/root"
 
     // --- Foreground Service ---
     const val SERVICE_NOTIFICATION_CHANNEL_ID = "openclaw_service"
@@ -36,8 +37,8 @@ object OpenClawConstants {
 
     // --- Preferences ---
     const val PREFS_NAME = "openclaw_prefs"
-    const val PREF_BOOTSTRAP_INSTALLED = "bootstrap_installed"
-    const val PREF_BOOTSTRAP_VERSION = "bootstrap_version"
+    const val PREF_ROOTFS_INSTALLED = "rootfs_installed"
+    const val PREF_ROOTFS_VERSION = "rootfs_version"
     const val PREF_GATEWAY_AUTOSTART = "gateway_autostart"
     const val PREF_BACKGROUND_ENABLED = "background_enabled"
     const val PREF_API_KEY_ANTHROPIC = "api_key_anthropic"
@@ -46,45 +47,41 @@ object OpenClawConstants {
     const val PREF_SELECTED_MODEL = "selected_model"
 
     /**
-     * Resolves all filesystem paths based on the app's actual data directory.
-     * Must be called with a valid Context.filesDir.
+     * Resolves all filesystem paths for the proot-based Linux environment.
+     * Paths prefixed with "host" are absolute Android paths used for file existence
+     * checks and ProcessBuilder configuration. Paths inside proot use the INNER_*
+     * constants above.
      */
     class Paths(filesDir: File) {
-        /** Root of the Linux filesystem: /data/data/<pkg>/files */
+        /** App's files directory: /data/data/<pkg>/files */
         val root: File = filesDir
 
-        /** $PREFIX — installed packages live here */
-        val prefix: File = File(filesDir, "usr")
+        /** Debian rootfs root — proot --rootfs points here */
+        val rootfs: File = File(filesDir, "rootfs")
 
-        /** $HOME — user home directory */
-        val home: File = File(filesDir, "home")
+        /** Temporary directory for proot's internal use */
+        val prootTmp: File = File(filesDir, "proot-tmp")
 
-        /** Node.js binary */
-        val nodeBinary: File = File(prefix, NODE_BINARY)
+        /** Node.js binary — host path for existence checks */
+        val hostNodeBinary: File = File(rootfs, "usr/bin/node")
 
-        /** OpenClaw entry point */
-        val openclawEntry: File = File(prefix, OPENCLAW_ENTRY)
+        /** Bash shell — host path for existence checks */
+        val hostShellBinary: File = File(rootfs, "usr/bin/bash")
 
-        /** Bash shell */
-        val shellBinary: File = File(prefix, SHELL_BINARY)
+        /** OpenClaw entry point — host path for existence checks */
+        val hostOpenclawEntry: File = File(rootfs, "usr/lib/node_modules/openclaw/bin/openclaw.js")
 
-        /** OpenClaw config directory */
-        val openclawConfig: File = File(home, ".openclaw")
+        /** Inner home directory — host path for file operations */
+        val hostInnerHome: File = File(rootfs, "root")
 
-        /** OpenClaw data directory */
-        val openclawData: File = File(openclawConfig, "data")
+        /** OpenClaw config directory — host path */
+        val hostOpenclawConfig: File = File(rootfs, "root/.openclaw")
 
-        /** Temporary directory */
-        val tmp: File = File(prefix, "tmp")
-
-        /** Standard bin directory */
-        val bin: File = File(prefix, "bin")
-
-        /** Standard lib directory */
-        val lib: File = File(prefix, "lib")
+        /** OpenClaw data directory — host path */
+        val hostOpenclawData: File = File(rootfs, "root/.openclaw/data")
 
         fun ensureDirectories() {
-            arrayOf(prefix, home, openclawConfig, openclawData, tmp, bin, lib).forEach {
+            arrayOf(rootfs, prootTmp, hostInnerHome, hostOpenclawConfig, hostOpenclawData).forEach {
                 it.mkdirs()
             }
         }

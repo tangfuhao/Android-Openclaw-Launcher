@@ -2,33 +2,28 @@ package com.openclaw.android.service
 
 import android.content.Context
 import android.util.Log
-import com.openclaw.android.bootstrap.EnvironmentSetup
 import com.openclaw.android.core.OpenClawConstants
+import com.openclaw.android.proot.ProotExecutor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
-import java.io.File
 import java.io.InputStreamReader
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * Manages the Node.js / OpenClaw Gateway process lifecycle.
+ * Manages the OpenClaw Gateway process lifecycle inside the proot environment.
  *
- * Responsibilities:
- * - Start / stop the gateway process via ProcessBuilder
- * - Stream stdout/stderr to a log buffer
- * - Detect crashes and auto-restart with exponential backoff
- * - Expose process state as observable Flow
+ * All process execution is delegated to [ProotExecutor], which wraps commands
+ * with proot to run them inside the Debian rootfs.
  */
 class ProcessManager(
     private val context: Context,
     private val paths: OpenClawConstants.Paths,
-    private val environmentSetup: EnvironmentSetup,
+    private val prootExecutor: ProotExecutor,
 ) {
     companion object {
         private const val TAG = "ProcessManager"
@@ -48,7 +43,7 @@ class ProcessManager(
         get() = gatewayProcess?.isAlive == true
 
     /**
-     * Starts the OpenClaw gateway process.
+     * Starts the OpenClaw gateway process inside proot.
      * Returns true if the process was launched successfully.
      */
     suspend fun startGateway(): Boolean = withContext(Dispatchers.IO) {
@@ -57,9 +52,15 @@ class ProcessManager(
             return@withContext true
         }
 
-        val verification = environmentSetup.verifyInstallation()
-        if (verification is EnvironmentSetup.VerificationResult.MissingBinaries) {
-            val msg = "Cannot start: missing binaries: ${verification.names}"
+        if (!prootExecutor.isAvailable()) {
+            val msg = "Cannot start: proot binary not found"
+            Log.e(TAG, msg)
+            _processState.value = ProcessState.Error(msg)
+            return@withContext false
+        }
+
+        if (!paths.hostNodeBinary.exists()) {
+            val msg = "Cannot start: node binary not found in rootfs"
             Log.e(TAG, msg)
             _processState.value = ProcessState.Error(msg)
             return@withContext false
@@ -68,33 +69,21 @@ class ProcessManager(
         try {
             _processState.value = ProcessState.Starting
 
-            val env = environmentSetup.buildEnvironment()
-            val command = listOf(
-                paths.nodeBinary.absolutePath,
-                paths.openclawEntry.absolutePath,
+            val innerCommand = listOf(
+                OpenClawConstants.INNER_NODE_BINARY,
+                OpenClawConstants.INNER_OPENCLAW_ENTRY,
                 "gateway",
                 "--port", OpenClawConstants.GATEWAY_PORT.toString(),
                 "--bind", OpenClawConstants.GATEWAY_HOST,
             )
 
-            Log.i(TAG, "Starting gateway: ${command.joinToString(" ")}")
+            Log.i(TAG, "Starting gateway via proot: ${innerCommand.joinToString(" ")}")
 
-            val processBuilder = ProcessBuilder(command)
-                .directory(paths.home)
-                .redirectErrorStream(true)
-
-            processBuilder.environment().apply {
-                clear()
-                putAll(env)
-            }
-
-            val process = processBuilder.start()
+            val process = prootExecutor.execute(innerCommand)
             gatewayProcess = process
 
-            // Start log reader in background
             readProcessOutput(process)
 
-            // Give the process a moment to start and check if it's still alive
             delay(1000)
             if (!process.isAlive) {
                 val exitCode = process.exitValue()
@@ -115,18 +104,12 @@ class ProcessManager(
         }
     }
 
-    /**
-     * Stops the gateway process gracefully, falling back to force-kill.
-     */
     fun stopGateway() {
         val process = gatewayProcess ?: return
         Log.i(TAG, "Stopping gateway process")
 
         try {
-            // Send SIGTERM for graceful shutdown
             process.destroy()
-
-            // Wait up to 5 seconds for graceful shutdown
             val exited = process.waitFor(5, java.util.concurrent.TimeUnit.SECONDS)
             if (!exited) {
                 Log.w(TAG, "Gateway did not exit gracefully, force killing")
@@ -164,27 +147,8 @@ class ProcessManager(
         return startGateway()
     }
 
-    /** Resets the restart counter (call after a period of healthy operation). */
     fun resetRestartCount() {
         restartCount.set(0)
-    }
-
-    /**
-     * Launches a bash shell session for the terminal tab.
-     * Returns the Process with connected stdin/stdout.
-     */
-    fun createShellSession(): Process {
-        val env = environmentSetup.buildEnvironment()
-        val processBuilder = ProcessBuilder(paths.shellBinary.absolutePath, "--login")
-            .directory(paths.home)
-            .redirectErrorStream(true)
-
-        processBuilder.environment().apply {
-            clear()
-            putAll(env)
-        }
-
-        return processBuilder.start()
     }
 
     private fun readProcessOutput(process: Process) {

@@ -1,38 +1,71 @@
-# 02 - 内嵌 Linux 环境（Bootstrap）
+# 02 - 内嵌 Linux 环境（proot + Debian）
 
 ## 概述
 
-Android OpenClaw 最核心的能力是在 Android 设备上运行完整的 Linux 二进制程序（Node.js, bash 等）。这通过以下机制实现：
+Android OpenClaw 最核心的能力是在 Android 设备上运行完整的 Linux 环境。这通过 **proot** 实现：
 
-1. 应用首次启动时，从 GitHub Releases 下载预编译的 Linux 文件系统压缩包（bootstrap）
-2. 解压到 app 的私有目录 `/data/data/com.openclaw.android/files/usr/`
-3. 通过 `ProcessBuilder` 直接启动这些二进制文件
+1. 应用首次启动时，从 GitHub Releases 下载预编译的 Debian rootfs 压缩包（`rootfs-aarch64.tar.xz`）
+2. 解压到 app 的私有目录 `/data/data/com.openclaw.android/files/rootfs/`
+3. 通过 proot 将 rootfs 作为虚拟根目录，进程看到标准 FHS 路径
+4. 所有二进制执行均由 `ProotExecutor` 构建 proot 命令行并通过 `ProcessBuilder` 启动
 
 **不需要 root 权限，不需要安装 Termux。**
+
+## proot 工作原理
+
+proot 是一个用户空间工具，通过 `ptrace` 拦截子进程的系统调用，透明地重映射文件路径：
+
+```
+进程认为自己读取:  /usr/bin/node
+proot 拦截 syscall 并重映射为:  /data/data/com.openclaw.android/files/rootfs/usr/bin/node
+```
+
+关键参数：
+- `--rootfs` — 指定 Debian rootfs 目录
+- `--bind /dev --bind /proc --bind /sys` — 挂载 Android 的设备/进程/系统文件系统
+- `--link2symlink` — 在不支持硬链接的文件系统上自动转为符号链接
+- `-0` — 伪装为 root 用户（uid/gid 0），使 apt 等工具正常工作
+- `--cwd` — 设置进程工作目录
 
 ## 文件系统布局
 
 ```
 /data/data/com.openclaw.android/files/     ← OpenClawConstants.Paths.root
-├── usr/                                    ← Paths.prefix ($PREFIX)
-│   ├── bin/                                ← Paths.bin
-│   │   ├── node                            ← Node.js 22+ 二进制
-│   │   ├── bash                            ← Bash shell
-│   │   ├── npm                             ← npm 包管理器
-│   │   └── ...                             ← 其他 Linux 工具
-│   ├── lib/                                ← Paths.lib
-│   │   ├── libc.so → ...                   ← 动态链接库
-│   │   └── node_modules/
-│   │       └── openclaw/                   ← OpenClaw Gateway
-│   │           └── bin/openclaw.js         ← Paths.openclawEntry
-│   ├── libexec/                            ← 辅助可执行文件
-│   └── tmp/                                ← Paths.tmp ($TMPDIR)
+├── rootfs/                                ← Paths.rootfs (proot --rootfs)
+│   ├── usr/                               ← 标准 FHS /usr
+│   │   ├── bin/
+│   │   │   ├── node                       ← Node.js 22+
+│   │   │   ├── bash                       ← Bash shell
+│   │   │   ├── npm                        ← npm 包管理器
+│   │   │   ├── git, python3, ...          ← Debian 软件包
+│   │   │   └── ...
+│   │   └── lib/
+│   │       └── node_modules/
+│   │           └── openclaw/              ← OpenClaw Gateway
+│   │               └── bin/openclaw.js    ← Paths.hostOpenclawEntry
+│   ├── etc/
+│   │   └── resolv.conf                    ← DNS 配置 (8.8.8.8)
+│   ├── root/                              ← $HOME (/root)
+│   │   └── .openclaw/                     ← Agent 配置与数据
+│   │       └── data/
+│   ├── bin/ lib/ var/ tmp/ ...            ← 标准 Debian 目录
+│   └── ...
 │
-└── home/                                   ← Paths.home ($HOME)
-    ├── .profile                            ← Shell 启动脚本
-    └── .openclaw/                          ← Paths.openclawConfig
-        └── data/                           ← Paths.openclawData
+├── proot-tmp/                             ← Paths.prootTmp (PROOT_TMP_DIR)
+│
+└── (app/lib/arm64-v8a/libproot.so)        ← proot 二进制（打包在 APK 中）
 ```
+
+### Host 路径 vs Inner 路径
+
+| 用途 | Host 路径 (Android 视角) | Inner 路径 (proot 内视角) |
+|------|--------------------------|--------------------------|
+| Node.js | `filesDir/rootfs/usr/bin/node` | `/usr/bin/node` |
+| Bash | `filesDir/rootfs/usr/bin/bash` | `/usr/bin/bash` |
+| OpenClaw | `filesDir/rootfs/usr/lib/node_modules/openclaw/bin/openclaw.js` | `/usr/lib/node_modules/openclaw/bin/openclaw.js` |
+| Home | `filesDir/rootfs/root` | `/root` |
+
+Host 路径用于文件存在性检查（`File.exists()`），Inner 路径用于传给 proot 内部进程。
 
 ## 安装流程
 
@@ -47,38 +80,39 @@ Android OpenClaw 最核心的能力是在 Android 设备上运行完整的 Linux
 ┌──────────────────────────────────────────────────────────────┐
 │ SetupViewModel                                                │
 │                                                              │
-│  bootstrapInstaller.install(BuildConfig.BOOTSTRAP_URL)       │
+│  rootfsInstaller.install(BuildConfig.ROOTFS_URL)             │
 └─────────────────────────────────┬────────────────────────────┘
                                   │
                                   ▼
 ┌──────────────────────────────────────────────────────────────┐
-│ BootstrapInstaller.install()                                  │
+│ RootfsInstaller.install()                                     │
 │                                                              │
 │  1. 检查是否已安装 (isInstalled)                              │
 │     → 已安装且非强制: 直接返回 Installed                       │
 │                                                              │
 │  2. 下载阶段 → state = Downloading(progress)                 │
-│     └── BootstrapDownloader.download(url, cacheDir)          │
+│     └── FileDownloader.download(url, cacheDir)               │
 │         └── OkHttp GET → 写入临时文件 → rename                │
 │         └── 回调 onProgress(bytesRead, totalBytes)            │
 │                                                              │
 │  3. 解压阶段 → state = Extracting                            │
-│     └── extractTarGz(archive, prefix)                        │
-│         ├── 优先使用 /system/bin/tar（系统自带，更快）          │
-│         └── 回退到 Java GZIPInputStream + 自实现 tar 解析      │
+│     └── extractRootfs(archive, rootfsDir)                    │
+│         └── /system/bin/tar xf archive -C rootfsDir          │
 │                                                              │
 │  4. 配置阶段 → state = Configuring                           │
-│     ├── setExecutablePermissions(prefix)                     │
-│     │   └── 递归遍历 bin/ lib/ libexec/                       │
-│     │       └── file.setExecutable(true, false)              │
-│     └── paths.ensureDirectories()                            │
+│     ├── 写入 /etc/resolv.conf (DNS: 8.8.8.8, 8.8.4.4)      │
+│     ├── 设置 bin/ usr/bin/ 等目录下文件的可执行权限            │
+│     └── 创建 proot-tmp 目录                                   │
 │                                                              │
-│  5. 清理 + 持久化                                            │
+│  5. 验证阶段 → state = Verifying                             │
+│     └── 检查 node, bash, openclaw.js 三个关键文件是否存在      │
+│                                                              │
+│  6. 清理 + 持久化                                            │
 │     ├── 删除缓存的压缩包                                      │
-│     ├── prefs.setBootstrapInstalled(true)                    │
-│     └── prefs.setBootstrapVersion("0.1.0")                   │
+│     ├── prefs.setRootfsInstalled(true)                       │
+│     └── prefs.setRootfsVersion("0.1.0")                      │
 │                                                              │
-│  6. state = Installed                                        │
+│  7. state = Installed                                        │
 │                                                              │
 │  异常: state = Error(message, cause)                         │
 └──────────────────────────────────────────────────────────────┘
@@ -86,7 +120,7 @@ Android OpenClaw 最核心的能力是在 Android 设备上运行完整的 Linux
 
 ## 状态机
 
-`BootstrapState` 是一个密封接口，表示安装过程的每个阶段：
+`RootfsState` 是一个密封接口，表示安装过程的每个阶段：
 
 ```
 NotInstalled ──► Checking ──► Downloading(progress) ──► Extracting(progress)
@@ -94,9 +128,12 @@ NotInstalled ──► Checking ──► Downloading(progress) ──► Extrac
                                                               ▼
                                                         Configuring
                                                               │
-                                              ┌───────────────┤
-                                              ▼               ▼
-                                          Installed        Error
+                                                              ▼
+                                                         Verifying
+                                                              │
+                                                  ┌───────────┤
+                                                  ▼           ▼
+                                              Installed     Error
 ```
 
 每个状态在 UI 中的表现：
@@ -105,75 +142,85 @@ NotInstalled ──► Checking ──► Downloading(progress) ──► Extrac
 |------|---------|
 | `NotInstalled` | 显示 "Download & Install" 按钮 |
 | `Downloading(0.65, 200MB, 310MB)` | 进度条 65%, "200MB / 310MB" |
-| `Extracting` | 旋转加载指示器, "Extracting files..." |
+| `Extracting` | 旋转加载指示器, "Extracting Debian rootfs..." |
 | `Configuring` | 旋转加载指示器, "Configuring environment..." |
+| `Verifying` | 旋转加载指示器, "Verifying installation..." |
 | `Installed` | "Installation complete!" + Continue 按钮 |
 | `Error("Network timeout")` | 错误信息 + Retry 按钮 |
 
-## 环境变量
+## ProotExecutor
 
-`EnvironmentSetup.buildEnvironment()` 为每个子进程构建完整的环境变量映射：
+`ProotExecutor` 是构建 proot 命令行和启动进程的核心类。
+
+### 命令构建
 
 ```
-HOME=/data/data/com.openclaw.android/files/home
-PREFIX=/data/data/com.openclaw.android/files/usr
-TMPDIR=/data/data/com.openclaw.android/files/usr/tmp
-LANG=en_US.UTF-8
+proot \
+  --rootfs=/data/.../files/rootfs \
+  --bind=/dev \
+  --bind=/proc \
+  --bind=/sys \
+  --link2symlink \
+  -0 \
+  --cwd=/root \
+  /usr/bin/node /usr/lib/node_modules/openclaw/bin/openclaw.js gateway --port 18789
+```
+
+### 环境变量
+
+`ProotExecutor.buildEnvironment()` 为 proot 宿主进程设置：
+
+```
+HOME=/root
 TERM=xterm-256color
-PATH=/data/data/.../files/usr/bin:/system/bin:/system/xbin
-LD_LIBRARY_PATH=/data/data/.../files/usr/lib
-OPENCLAW_HOME=/data/data/.../files/home/.openclaw
-OPENCLAW_DATA=/data/data/.../files/home/.openclaw/data
-OPENCLAW_GATEWAY_PORT=18789
-NODE_PATH=/data/data/.../files/usr/lib/node_modules
+LANG=en_US.UTF-8
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+PROOT_TMP_DIR=/data/.../files/proot-tmp
 ```
 
-这些变量通过 `ProcessBuilder.environment()` 注入到 Node.js 进程和 bash 会话中。
+这些变量通过 `ProcessBuilder.environment()` 注入到 proot 进程中，proot 会将它们传递给内部的 Debian 进程。
 
 ## 安装验证
 
-`EnvironmentSetup.verifyInstallation()` 检查三个关键二进制是否存在：
+`RootfsInstaller.verifyRootfs()` 检查三个关键文件是否存在（使用 Host 路径）：
 
-| 二进制 | 路径 | 角色 |
-|--------|------|------|
-| `node` | `$PREFIX/bin/node` | Node.js 运行时 |
-| `bash` | `$PREFIX/bin/bash` | Shell（终端 Tab 用） |
-| `openclaw` | `$PREFIX/lib/node_modules/openclaw/bin/openclaw.js` | Gateway 入口 |
+| 二进制 | Host 路径 | Inner 路径 | 角色 |
+|--------|-----------|-----------|------|
+| `node` | `rootfs/usr/bin/node` | `/usr/bin/node` | Node.js 运行时 |
+| `bash` | `rootfs/usr/bin/bash` | `/usr/bin/bash` | Shell |
+| `openclaw` | `rootfs/usr/lib/node_modules/openclaw/bin/openclaw.js` | `/usr/lib/node_modules/openclaw/bin/openclaw.js` | Gateway 入口 |
 
-任何一个缺失会返回 `MissingBinaries(names)`，`ProcessManager` 收到后拒绝启动。
+任何一个缺失会抛出异常，`RootfsInstaller` 进入 `Error` 状态。
 
-## Tar 解压器实现细节
+## Rootfs 构建指南
 
-内置了一个最小化的 POSIX tar 解析器（`BootstrapInstaller.extractTarStream`），处理三种文件类型：
-
-| 类型标志 | 含义 | 处理方式 |
-|----------|------|----------|
-| `'0'` / `'\0'` | 普通文件 | 创建文件并写入内容 |
-| `'5'` / `'D'` | 目录 | `mkdirs()` |
-| `'2'` | 符号链接 | `ln -sf linkName target` |
-
-每条 tar 记录包含 512 字节头部，数据段按 512 字节对齐填充。
-
-## Bootstrap 构建指南
-
-Bootstrap 压缩包需要在 ARM64 Linux 环境中构建（可以用 Termux 或 Docker + QEMU）：
+Rootfs 压缩包在 CI（ARM64 Linux 或 Docker + QEMU）中构建，使用 `scripts/build-rootfs.sh`：
 
 ```bash
 #!/bin/bash
-# 在 Termux 或 ARM64 容器中执行
+# 需要 root 权限和 debootstrap
 
-# 1. 安装 Node.js
-pkg install nodejs-lts
+# 1. 创建最小化 Debian bookworm 基础系统
+debootstrap --arch=arm64 bookworm rootfs http://deb.debian.org/debian
 
-# 2. 全局安装 OpenClaw
-npm install -g openclaw@latest
+# 2. chroot 进入安装所需软件
+chroot rootfs /bin/bash -c "
+  apt update && apt install -y nodejs npm git python3 make vim-tiny jq curl
+  npm install -g openclaw@latest
+  apt clean && rm -rf /var/lib/apt/lists/* /tmp/*
+"
 
-# 3. 打包 $PREFIX 为 tar.gz
-cd $PREFIX/..
-tar czf bootstrap-aarch64.tar.gz usr/
+# 3. 打包为 tar.xz
+tar -cJf rootfs-aarch64.tar.xz -C rootfs .
 
 # 4. 上传到 GitHub Releases
-gh release upload bootstrap-v0.1.0 bootstrap-aarch64.tar.gz
+gh release upload rootfs-v0.1.0 rootfs-aarch64.tar.xz
 ```
 
-最终压缩包大小约 300MB（包含 Node.js + npm + OpenClaw + 基础工具链）。
+最终压缩包约 300MB（包含 Debian 基础系统 + Node.js + OpenClaw + 常用工具链）。
+
+## proot 二进制分发
+
+proot 静态编译的 aarch64 二进制通过 `scripts/fetch-proot.sh` 下载，放置于 `app/src/main/jniLibs/arm64-v8a/libproot.so`。打包进 APK 后位于 `nativeLibraryDir`，运行时通过 `context.applicationInfo.nativeLibraryDir + "/libproot.so"` 获取路径。
+
+命名为 `.so` 是因为 Android 仅自动解压 `lib/` 目录下的 `.so` 文件到 `nativeLibraryDir`。

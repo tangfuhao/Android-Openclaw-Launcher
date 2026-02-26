@@ -45,9 +45,9 @@ ls -la app/build/outputs/apk/debug/app-debug.apk
 com.openclaw.android.
 ├── core/       ← 常量、配置、基础工具（不依赖其他项目包）
 ├── data/       ← 数据模型、持久化（不依赖 UI/Service）
-├── bootstrap/  ← Linux 环境管理（不依赖 UI）
+├── proot/      ← proot 执行器、Debian rootfs 管理（不依赖 UI）
 ├── gateway/    ← Gateway 协议（不依赖 UI/Service）
-├── service/    ← Android 服务层（可依赖 bootstrap/gateway）
+├── service/    ← Android 服务层（可依赖 proot/gateway）
 ├── di/         ← Hilt 模块配置
 └── ui/         ← UI 层（可依赖所有其他层）
     ├── theme/
@@ -67,7 +67,7 @@ com.openclaw.android.
 |------|----------|------|
 | Composable 函数 | PascalCase | `ChatScreen`, `MessageBubble` |
 | ViewModel | `XxxViewModel` | `ChatViewModel` |
-| 密封接口（状态） | `XxxState` | `GatewayState`, `BootstrapState` |
+| 密封接口（状态） | `XxxState` | `GatewayState`, `RootfsState` |
 | DI 模块 | `XxxModule` | `AppModule` |
 | 常量对象 | `XxxConstants` | `OpenClawConstants` |
 | 协议数据类 | 按协议命名 | `GatewayRequest`, `ChatEventPayload` |
@@ -158,16 +158,16 @@ adb logcat -s "ProcessManager:*" "gateway-log-reader:*"
 adb logcat -s "GatewayClient:*"
 ```
 
-### 模拟 Bootstrap 已安装
+### 模拟 Rootfs 已安装
 
-如果没有实际的 bootstrap 包可以下载，可以手动创建占位文件来跳过安装：
+如果没有实际的 rootfs 包可以下载，可以手动创建占位文件来跳过安装：
 
 ```bash
 adb shell
 run-as com.openclaw.android.debug
-mkdir -p files/usr/bin files/usr/lib/node_modules/openclaw/bin files/home
-touch files/usr/bin/node files/usr/bin/bash files/usr/lib/node_modules/openclaw/bin/openclaw.js
-chmod +x files/usr/bin/node files/usr/bin/bash
+mkdir -p files/rootfs/usr/bin files/rootfs/usr/lib/node_modules/openclaw/bin files/rootfs/root
+touch files/rootfs/usr/bin/node files/rootfs/usr/bin/bash files/rootfs/usr/lib/node_modules/openclaw/bin/openclaw.js
+chmod +x files/rootfs/usr/bin/node files/rootfs/usr/bin/bash
 ```
 
 然后在 DataStore 中标记已安装（或修改 `isInstalled()` 暂时返回 true）。
@@ -200,12 +200,12 @@ init {
 | 需求 | 文件 |
 |------|------|
 | 修改 Gateway 地址/端口 | `core/OpenClawConstants.kt` |
-| 修改 Bootstrap 下载 URL | `app/build.gradle.kts` → `BOOTSTRAP_URL` |
+| 修改 Rootfs 下载 URL | `app/build.gradle.kts` → `ROOTFS_URL` |
 | 添加新的依赖 | `gradle/libs.versions.toml` |
 | 修改 Android 权限 | `AndroidManifest.xml` |
 | 修改主题色 | `ui/theme/Color.kt` |
 | 修改 DI 注入 | `di/AppModule.kt` |
 | 修改进程启动命令 | `service/ProcessManager.kt` → `startGateway()` |
-| 修改环境变量 | `bootstrap/EnvironmentSetup.kt` → `buildEnvironment()` |
+| 修改环境变量 | `proot/ProotExecutor.kt` → `buildEnvironment()` |
 | 修改 WebSocket 握手 | `gateway/GatewayClient.kt` → `performHandshake()` |
 | 修改消息气泡样式 | `ui/chat/MessageBubble.kt` |

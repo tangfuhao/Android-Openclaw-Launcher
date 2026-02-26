@@ -43,11 +43,11 @@ android_openclaw/
             │   ├── ChatMessage.kt       # 消息数据模型
             │   └── PreferencesManager.kt # DataStore 偏好存储
             │
-            ├── bootstrap/
-            │   ├── BootstrapState.kt    # 安装状态（密封接口）
-            │   ├── BootstrapDownloader.kt # HTTP 下载器
-            │   ├── BootstrapInstaller.kt  # 安装协调器
-            │   └── EnvironmentSetup.kt    # 环境变量与验证
+            ├── proot/
+            │   ├── RootfsState.kt       # 安装状态（密封接口）
+            │   ├── FileDownloader.kt    # HTTP 下载器
+            │   ├── RootfsInstaller.kt   # Rootfs 安装协调器
+            │   └── ProotExecutor.kt     # proot 命令构建与进程启动
             │
             ├── gateway/
             │   ├── GatewayState.kt      # 连接状态（密封接口）
@@ -117,7 +117,7 @@ Android 10 (API 29) 起，如果 `targetSdkVersion >= 29`，系统将禁止在 `
 
 | 字段 | 值 | 用途 |
 |------|-----|------|
-| `BOOTSTRAP_URL` | GitHub Releases 下载地址 | Bootstrap 压缩包 URL |
+| `ROOTFS_URL` | GitHub Releases 下载地址 | Debian rootfs 压缩包 URL |
 | `GATEWAY_HOST` | `127.0.0.1` | Gateway 绑定地址 |
 | `GATEWAY_PORT` | `18789` | Gateway 端口 |
 
@@ -170,7 +170,7 @@ APK 输出路径：`app/build/outputs/apk/debug/app-debug.apk`
 
 | 权限 | 必要性 | 用途 |
 |------|--------|------|
-| `INTERNET` | 必需 | 下载 Bootstrap、LLM API 调用 |
+| `INTERNET` | 必需 | 下载 Debian rootfs、LLM API 调用 |
 | `ACCESS_NETWORK_STATE` | 必需 | 检测网络状态 |
 | `FOREGROUND_SERVICE` | 必需 | 前台服务（保活 Gateway） |
 | `WAKE_LOCK` | 必需 | 防止 CPU 休眠 |

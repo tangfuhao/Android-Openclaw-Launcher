@@ -26,7 +26,7 @@ import com.termux.view.TerminalView
  */
 @Composable
 fun TerminalScreen(viewModel: TerminalViewModel = hiltViewModel()) {
-    val bootstrapInstalled by viewModel.bootstrapInstalled.collectAsStateWithLifecycle()
+    val rootfsInstalled by viewModel.rootfsInstalled.collectAsStateWithLifecycle()
     val sessionTitle by viewModel.sessionTitle.collectAsStateWithLifecycle()
 
     Column(modifier = Modifier.fillMaxSize()) {
@@ -41,7 +41,7 @@ fun TerminalScreen(viewModel: TerminalViewModel = hiltViewModel()) {
             )
         }
 
-        if (!bootstrapInstalled) {
+        if (!rootfsInstalled) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center,

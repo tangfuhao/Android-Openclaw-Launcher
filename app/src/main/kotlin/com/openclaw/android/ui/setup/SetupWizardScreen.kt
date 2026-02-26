@@ -27,14 +27,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.openclaw.android.bootstrap.BootstrapState
+import com.openclaw.android.proot.RootfsState
 
 @Composable
 fun SetupWizardScreen(
     onSetupComplete: () -> Unit = {},
     viewModel: SetupViewModel = hiltViewModel(),
 ) {
-    val bootstrapState by viewModel.bootstrapState.collectAsStateWithLifecycle()
+    val rootfsState by viewModel.rootfsState.collectAsStateWithLifecycle()
     val currentStep by viewModel.currentStep.collectAsStateWithLifecycle()
 
     Column(
@@ -48,7 +48,7 @@ fun SetupWizardScreen(
             when (step) {
                 SetupStep.WELCOME -> WelcomePage(onNext = { viewModel.nextStep() })
                 SetupStep.DEVICE_CHECK -> DeviceCheckPage(viewModel = viewModel)
-                SetupStep.DOWNLOAD -> DownloadPage(bootstrapState = bootstrapState, viewModel = viewModel)
+                SetupStep.DOWNLOAD -> DownloadPage(rootfsState = rootfsState, viewModel = viewModel)
                 SetupStep.API_KEY -> ApiKeyPage(viewModel = viewModel)
                 SetupStep.COMPLETE -> CompletePage(onFinish = { viewModel.finishSetup() })
             }
@@ -63,7 +63,7 @@ private fun WelcomePage(onNext: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         modifier = Modifier.fillMaxSize(),
     ) {
-        Text(text = "🦞", style = MaterialTheme.typography.displayLarge)
+        Text(text = "\uD83E\uDD9E", style = MaterialTheme.typography.displayLarge)
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = "Welcome to OpenClaw",
@@ -133,7 +133,7 @@ private fun DeviceCheckPage(viewModel: SetupViewModel) {
 @Composable
 private fun CheckItem(text: String, ok: Boolean) {
     Text(
-        text = "${if (ok) "✓" else "✗"} $text",
+        text = "${if (ok) "\u2713" else "\u2717"} $text",
         style = MaterialTheme.typography.bodyLarge,
         color = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
         modifier = Modifier.padding(vertical = 4.dp),
@@ -141,62 +141,67 @@ private fun CheckItem(text: String, ok: Boolean) {
 }
 
 @Composable
-private fun DownloadPage(bootstrapState: BootstrapState, viewModel: SetupViewModel) {
+private fun DownloadPage(rootfsState: RootfsState, viewModel: SetupViewModel) {
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
         modifier = Modifier.fillMaxSize(),
     ) {
         Text(
-            text = "Installing Environment",
+            text = "Installing Linux Environment",
             style = MaterialTheme.typography.headlineMedium,
         )
         Spacer(modifier = Modifier.height(24.dp))
 
-        when (bootstrapState) {
-            is BootstrapState.NotInstalled, is BootstrapState.Checking -> {
-                Text("Ready to download the Linux runtime environment (~300MB)")
+        when (rootfsState) {
+            is RootfsState.NotInstalled, is RootfsState.Checking -> {
+                Text("Ready to download the Debian Linux environment (~200MB)")
                 Spacer(modifier = Modifier.height(24.dp))
                 Button(onClick = { viewModel.startInstallation() }) {
                     Text("Download & Install")
                 }
             }
-            is BootstrapState.Downloading -> {
-                Text("Downloading... ${(bootstrapState.progress * 100).toInt()}%")
+            is RootfsState.Downloading -> {
+                Text("Downloading... ${(rootfsState.progress * 100).toInt()}%")
                 Spacer(modifier = Modifier.height(16.dp))
                 LinearProgressIndicator(
-                    progress = { bootstrapState.progress },
+                    progress = { rootfsState.progress },
                     modifier = Modifier.fillMaxWidth(0.8f),
                 )
                 Spacer(modifier = Modifier.height(8.dp))
-                val mbDownloaded = bootstrapState.bytesDownloaded / 1_048_576
-                val mbTotal = bootstrapState.totalBytes / 1_048_576
+                val mbDownloaded = rootfsState.bytesDownloaded / 1_048_576
+                val mbTotal = rootfsState.totalBytes / 1_048_576
                 Text(
                     "${mbDownloaded}MB / ${mbTotal}MB",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            is BootstrapState.Extracting -> {
-                Text("Extracting files...")
+            is RootfsState.Extracting -> {
+                Text("Extracting Debian filesystem...")
                 Spacer(modifier = Modifier.height(16.dp))
                 CircularProgressIndicator(modifier = Modifier.size(48.dp))
             }
-            is BootstrapState.Configuring -> {
+            is RootfsState.Configuring -> {
                 Text("Configuring environment...")
                 Spacer(modifier = Modifier.height(16.dp))
                 CircularProgressIndicator(modifier = Modifier.size(48.dp))
             }
-            is BootstrapState.Installed -> {
+            is RootfsState.Verifying -> {
+                Text("Verifying Linux environment...")
+                Spacer(modifier = Modifier.height(16.dp))
+                CircularProgressIndicator(modifier = Modifier.size(48.dp))
+            }
+            is RootfsState.Installed -> {
                 Text("Installation complete!", color = MaterialTheme.colorScheme.primary)
                 Spacer(modifier = Modifier.height(24.dp))
                 Button(onClick = { viewModel.nextStep() }) {
                     Text("Continue")
                 }
             }
-            is BootstrapState.Error -> {
+            is RootfsState.Error -> {
                 Text(
-                    "Installation failed: ${bootstrapState.message}",
+                    "Installation failed: ${rootfsState.message}",
                     color = MaterialTheme.colorScheme.error,
                 )
                 Spacer(modifier = Modifier.height(16.dp))
@@ -263,7 +268,7 @@ private fun CompletePage(onFinish: () -> Unit) {
         verticalArrangement = Arrangement.Center,
         modifier = Modifier.fillMaxSize(),
     ) {
-        Text(text = "🎉", style = MaterialTheme.typography.displayLarge)
+        Text(text = "\uD83C\uDF89", style = MaterialTheme.typography.displayLarge)
         Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = "You're All Set!",

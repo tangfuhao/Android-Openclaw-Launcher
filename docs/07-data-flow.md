@@ -185,7 +185,7 @@ PreferencesManager (DataStore Preferences)
        ├──► anthropicApiKey (Flow<String>)
        │    └── SettingsScreen → API key 输入框
        │
-       └──► isBootstrapInstalled (Flow<Boolean>)
+       └──► isRootfsInstalled (Flow<Boolean>)
             └── TerminalScreen → 显示终端或 "未安装" 提示
             └── BootReceiver → 开机自启判断
 ```
@@ -203,9 +203,9 @@ PreferencesManager (DataStore Preferences)
 |------|-----------|------------|
 | ProcessManager | `processState`, `logLines` | — |
 | GatewayClient | `connectionState` | `events`, `chatEvents`, `approvalRequests` |
-| BootstrapInstaller | `state` | — |
+| RootfsInstaller | `state` | — |
 | ChatViewModel | `messages`, `isLoading`, `pendingApproval` | — |
-| TerminalViewModel | `bootstrapInstalled`, `fontSize`, `sessionTitle` | — |
+| TerminalViewModel | `rootfsInstalled`, `fontSize`, `sessionTitle` | — |
 
 ## 线程模型
 
@@ -215,6 +215,6 @@ PreferencesManager (DataStore Preferences)
 | GatewayClient 帧解析 | OkHttp I/O → coroutine (Dispatchers.IO) | 避免阻塞 UI |
 | ProcessBuilder.start() | Dispatchers.IO | 文件 I/O |
 | Gateway 日志读取 | 专用 daemon thread ("gateway-log-reader") | 持续阻塞式 readline |
-| Bootstrap 下载/解压 | Dispatchers.IO | 长时间 I/O |
+| Rootfs 下载/解压 | Dispatchers.IO | 长时间 I/O |
 | UI 状态更新 | Main (via StateFlow) | Compose 必须在主线程 |
 | DataStore 读写 | DataStore 内部线程 | 自动管理 |

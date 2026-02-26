@@ -54,9 +54,9 @@ AppModule (@Module @InstallIn(SingletonComponent))
 ├── providePaths(@ApplicationContext) ──► Paths               [Singleton]
 ├── provideOkHttpClient()            ──► OkHttpClient         [Singleton]
 ├── providePreferencesManager()      ──► PreferencesManager   [Singleton]
-├── provideEnvironmentSetup(Paths)   ──► EnvironmentSetup     [Singleton]
-├── provideBootstrapDownloader(Http) ──► BootstrapDownloader  [Singleton]
-├── provideBootstrapInstaller(...)   ──► BootstrapInstaller   [Singleton]
+├── provideFileDownloader(Http)      ──► FileDownloader       [Singleton]
+├── provideProotExecutor(Ctx,Paths)  ──► ProotExecutor        [Singleton]
+├── provideRootfsInstaller(...)      ──► RootfsInstaller      [Singleton]
 ├── provideProcessManager(...)       ──► ProcessManager       [Singleton]
 ├── provideGatewayClient(Http)       ──► GatewayClient        [Singleton]
 └── provideHealthMonitor(Gateway)    ──► HealthMonitor        [Singleton]
@@ -67,16 +67,16 @@ AppModule (@Module @InstallIn(SingletonComponent))
 ```
 @ApplicationContext ──┬──► Paths
                      │      │
-                     │      ├──► EnvironmentSetup ──► ProcessManager
-                     │      │                              ▲
-                     │      ├──► BootstrapInstaller ────────┘
+                     │      ├──► ProotExecutor ──► ProcessManager
+                     │      │                         ▲
+                     │      ├──► RootfsInstaller ──────┘
                      │      │       ▲
                      │      │       │
                      ├──────┘       │
                      │              │
-                     └──► PreferencesManager ──► BootstrapInstaller
+                     └──► PreferencesManager ──► RootfsInstaller
                      
-OkHttpClient ──┬──► BootstrapDownloader ──► BootstrapInstaller
+OkHttpClient ──┬──► FileDownloader ──► RootfsInstaller
                │
                └──► GatewayClient ──► HealthMonitor
 ```
@@ -108,8 +108,8 @@ fun ChatScreen(viewModel: ChatViewModel = hiltViewModel()) {
 |-----------|-----------|
 | `MainViewModel` | `PreferencesManager` |
 | `ChatViewModel` | `GatewayClient` |
-| `TerminalViewModel` | `@ApplicationContext`, `BootstrapInstaller`, `Paths`, `EnvironmentSetup` |
-| `SetupViewModel` | `@ApplicationContext`, `BootstrapInstaller`, `PreferencesManager` |
+| `TerminalViewModel` | `@ApplicationContext`, `ProotExecutor`, `RootfsInstaller`, `Paths` |
+| `SetupViewModel` | `@ApplicationContext`, `RootfsInstaller`, `PreferencesManager` |
 | `SettingsViewModel` | `PreferencesManager`, `ProcessManager` |
 
 ## 作用域说明

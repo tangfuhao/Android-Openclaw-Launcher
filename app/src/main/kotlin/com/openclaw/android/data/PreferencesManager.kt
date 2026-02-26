@@ -17,8 +17,8 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 class PreferencesManager(private val context: Context) {
 
     private object Keys {
-        val BOOTSTRAP_INSTALLED = booleanPreferencesKey("bootstrap_installed")
-        val BOOTSTRAP_VERSION = stringPreferencesKey("bootstrap_version")
+        val ROOTFS_INSTALLED = booleanPreferencesKey("rootfs_installed")
+        val ROOTFS_VERSION = stringPreferencesKey("rootfs_version")
         val GATEWAY_AUTOSTART = booleanPreferencesKey("gateway_autostart")
         val BACKGROUND_ENABLED = booleanPreferencesKey("background_enabled")
         val API_KEY_ANTHROPIC = stringPreferencesKey("api_key_anthropic")
@@ -28,17 +28,17 @@ class PreferencesManager(private val context: Context) {
         val SETUP_COMPLETED = booleanPreferencesKey("setup_completed")
     }
 
-    // --- Bootstrap ---
+    // --- Rootfs ---
 
-    val isBootstrapInstalled: Flow<Boolean> =
-        context.dataStore.data.map { it[Keys.BOOTSTRAP_INSTALLED] ?: false }
+    val isRootfsInstalled: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.ROOTFS_INSTALLED] ?: false }
 
-    suspend fun setBootstrapInstalled(value: Boolean) {
-        context.dataStore.edit { it[Keys.BOOTSTRAP_INSTALLED] = value }
+    suspend fun setRootfsInstalled(value: Boolean) {
+        context.dataStore.edit { it[Keys.ROOTFS_INSTALLED] = value }
     }
 
-    suspend fun setBootstrapVersion(version: String) {
-        context.dataStore.edit { it[Keys.BOOTSTRAP_VERSION] = version }
+    suspend fun setRootfsVersion(version: String) {
+        context.dataStore.edit { it[Keys.ROOTFS_VERSION] = version }
     }
 
     // --- Gateway ---
@@ -93,8 +93,8 @@ class PreferencesManager(private val context: Context) {
     }
 
     /** Blocking read for use in Service/BroadcastReceiver where coroutines aren't available. */
-    fun isBootstrapInstalledSync(): Boolean = runBlocking {
-        isBootstrapInstalled.first()
+    fun isRootfsInstalledSync(): Boolean = runBlocking {
+        isRootfsInstalled.first()
     }
 
     fun isBackgroundEnabledSync(): Boolean = runBlocking {

@@ -32,15 +32,15 @@ Android OpenClaw 是一个自包含的 Android 应用，内嵌完整 Linux 运�
 │  └───────────┼───────────────────────────────────────────────┘ │
 │              │                                                  │
 │  ┌───────────┴───────────────────────────────────────────────┐ │
-│  │         内嵌 Linux 环境 (app 私有目录)                     │ │
+│  │         proot + Debian Linux 环境                          │ │
 │  │                                                           │ │
 │  │  /data/data/com.openclaw.android/files/                   │ │
-│  │  ├── usr/                                                 │ │
-│  │  │   ├── bin/node          ← Node.js 22+                 │ │
-│  │  │   ├── bin/bash          ← Shell                        │ │
-│  │  │   └── lib/node_modules/openclaw/  ← OpenClaw Gateway  │ │
-│  │  └── home/                                                │ │
-│  │      └── .openclaw/        ← Agent 配置与数据             │ │
+│  │  ├── rootfs/              ← Debian rootfs (proot --rootfs)│ │
+│  │  │   ├── usr/bin/node     ← Node.js 22+                  │ │
+│  │  │   ├── usr/bin/bash     ← Shell                         │ │
+│  │  │   ├── usr/lib/node_modules/openclaw/ ← Gateway         │ │
+│  │  │   └── root/.openclaw/  ← Agent 配置与数据              │ │
+│  │  └── proot-tmp/           ← proot 临时目录                │ │
 │  └───────────────────────────────────────────────────────────┘ │
 └─────────────────────────────────────────────────────────────────┘
          │                              ▲
@@ -57,21 +57,25 @@ Android OpenClaw 是一个自包含的 Android 应用，内嵌完整 Linux 运�
 | **ViewModel 层** | 状态管理与业务逻辑 | `ChatViewModel`, `TerminalViewModel`, `SettingsViewModel`, `SetupViewModel` |
 | **Gateway 层** | WebSocket 协议通信 | `GatewayClient`, `ChatApi`, `ApprovalApi`, `GatewayProtocol` |
 | **Service 层** | 后台进程生命周期管理 | `OpenClawService`, `ProcessManager`, `HealthMonitor`, `BootReceiver` |
-| **Bootstrap 层** | Linux 环境安装与配置 | `BootstrapInstaller`, `BootstrapDownloader`, `EnvironmentSetup` |
+| **Proot 层** | Debian Linux 环境安装与 proot 执行 | `RootfsInstaller`, `ProotExecutor`, `FileDownloader` |
 
 ## 关键设计决策
 
-### 1. targetSdk = 28（绕过 W^X）
+### 1. proot + Debian（完整 Linux 环境）
 
-Android 10+ (API 29) 引入了 W^X (Write XOR Execute) 限制，禁止从 `/data/data/` 执行二进制文件。将 `targetSdk` 设为 28 使得在 API 29+ 的设备上仍然可以执行 Node.js 等二进制。这个策略仅适用于 sideload 分发，如果需要上架 Google Play 未来需要采用 `system_linker_exec` 方案。
+通过 proot（用户空间 ptrace 路径重映射）运行完整的 Debian rootfs。进程看到标准 FHS 路径（`/usr/bin/node`），proot 透明地将其映射到 `filesDir/rootfs/usr/bin/node`。AI Agent 可通过 apt 安装任意 Linux 工具。
 
-### 2. 单进程自包含
+### 2. targetSdk = 28（绕过 W^X）
 
-整个 OpenClaw 技术栈（Gateway + Agent Runtime）以 Node.js 子进程的形式运行在 app 的进程空间内。UI 通过 `ws://127.0.0.1:18789` 本地回环连接，零网络延迟、零外部依赖。
+Android 10+ (API 29) 引入了 W^X (Write XOR Execute) 限制，禁止从 `/data/data/` 执行二进制文件。将 `targetSdk` 设为 28 使 proot 及 rootfs 中的二进制可以正常执行。仅适用于 sideload 分发。
 
-### 3. Termux 库嵌入（非独立 Termux 应用）
+### 3. 单进程自包含
 
-不需要用户安装 Termux。`terminal-emulator`（PTY 管理）和 `terminal-view`（终端渲染 View）通过 JitPack 以 AAR/JAR 依赖编译进 APK。终端会话直接在 app 内嵌的 bash 中创建。
+整个 OpenClaw 技术栈（Gateway + Agent Runtime）以 proot 包装的 Node.js 子进程形式运行。UI 通过 `ws://127.0.0.1:18789` 本地回环连接，零网络延迟、零外部依赖。
+
+### 4. Termux 库嵌入（非独立 Termux 应用）
+
+不需要用户安装 Termux。`terminal-emulator`（PTY 管理）和 `terminal-view`（终端渲染 View）通过 JitPack 以 AAR/JAR 依赖编译进 APK。终端会话在 proot 包装的 Debian bash 中创建。
 
 ### 4. Foreground Service + WakeLock
 

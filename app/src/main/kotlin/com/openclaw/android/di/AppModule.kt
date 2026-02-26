@@ -1,12 +1,12 @@
 package com.openclaw.android.di
 
 import android.content.Context
-import com.openclaw.android.bootstrap.BootstrapDownloader
-import com.openclaw.android.bootstrap.BootstrapInstaller
-import com.openclaw.android.bootstrap.EnvironmentSetup
 import com.openclaw.android.core.OpenClawConstants
 import com.openclaw.android.data.PreferencesManager
 import com.openclaw.android.gateway.GatewayClient
+import com.openclaw.android.proot.FileDownloader
+import com.openclaw.android.proot.ProotExecutor
+import com.openclaw.android.proot.RootfsInstaller
 import com.openclaw.android.service.HealthMonitor
 import com.openclaw.android.service.ProcessManager
 import dagger.Module
@@ -33,7 +33,7 @@ object AppModule {
     fun provideOkHttpClient(): OkHttpClient {
         return OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(0, TimeUnit.SECONDS) // no timeout for WebSocket
+            .readTimeout(0, TimeUnit.SECONDS)
             .writeTimeout(10, TimeUnit.SECONDS)
             .pingInterval(30, TimeUnit.SECONDS)
             .build()
@@ -47,25 +47,28 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideEnvironmentSetup(paths: OpenClawConstants.Paths): EnvironmentSetup {
-        return EnvironmentSetup(paths)
+    fun provideFileDownloader(okHttpClient: OkHttpClient): FileDownloader {
+        return FileDownloader(okHttpClient)
     }
 
     @Provides
     @Singleton
-    fun provideBootstrapDownloader(okHttpClient: OkHttpClient): BootstrapDownloader {
-        return BootstrapDownloader(okHttpClient)
-    }
-
-    @Provides
-    @Singleton
-    fun provideBootstrapInstaller(
+    fun provideProotExecutor(
         @ApplicationContext context: Context,
         paths: OpenClawConstants.Paths,
-        downloader: BootstrapDownloader,
+    ): ProotExecutor {
+        return ProotExecutor(context, paths)
+    }
+
+    @Provides
+    @Singleton
+    fun provideRootfsInstaller(
+        @ApplicationContext context: Context,
+        paths: OpenClawConstants.Paths,
+        downloader: FileDownloader,
         preferencesManager: PreferencesManager,
-    ): BootstrapInstaller {
-        return BootstrapInstaller(context, paths, downloader, preferencesManager)
+    ): RootfsInstaller {
+        return RootfsInstaller(context, paths, downloader, preferencesManager)
     }
 
     @Provides
@@ -73,9 +76,9 @@ object AppModule {
     fun provideProcessManager(
         @ApplicationContext context: Context,
         paths: OpenClawConstants.Paths,
-        environmentSetup: EnvironmentSetup,
+        prootExecutor: ProotExecutor,
     ): ProcessManager {
-        return ProcessManager(context, paths, environmentSetup)
+        return ProcessManager(context, paths, prootExecutor)
     }
 
     @Provides
