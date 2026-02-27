@@ -23,7 +23,7 @@ object OpenClawConstants {
 
     // --- Inner paths (as seen by processes inside proot) ---
     const val INNER_NODE_BINARY = "/usr/bin/node"
-    const val INNER_OPENCLAW_ENTRY = "/usr/lib/node_modules/openclaw/bin/openclaw.js"
+    const val INNER_OPENCLAW_ENTRY = "/usr/lib/node_modules/openclaw/openclaw.mjs"
     const val INNER_SHELL_BINARY = "/usr/bin/bash"
     const val INNER_HOME = "/root"
 
@@ -69,7 +69,7 @@ object OpenClawConstants {
         val hostShellBinary: File = File(rootfs, "usr/bin/bash")
 
         /** OpenClaw entry point — host path for existence checks */
-        val hostOpenclawEntry: File = File(rootfs, "usr/lib/node_modules/openclaw/bin/openclaw.js")
+        val hostOpenclawEntry: File = File(rootfs, "usr/lib/node_modules/openclaw/openclaw.mjs")
 
         /** Inner home directory — host path for file operations */
         val hostInnerHome: File = File(rootfs, "root")
