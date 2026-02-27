@@ -20,7 +20,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "ROOTFS_URL", "\"https://github.com/nicebug/android-openclaw/releases/download/rootfs-v0.1.0/rootfs-aarch64.tar.xz\"")
+        buildConfigField("String", "ROOTFS_URL", "\"https://github.com/tangfuhao/Android-Openclaw-Launcher/releases/download/rootfs-v0.1.0/rootfs-aarch64.tar.xz\"")
         buildConfigField("String", "GATEWAY_HOST", "\"127.0.0.1\"")
         buildConfigField("int", "GATEWAY_PORT", "18789")
     }
