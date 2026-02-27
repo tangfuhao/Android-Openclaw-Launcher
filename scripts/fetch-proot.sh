@@ -19,8 +19,8 @@ TARGET_FILE="${TARGET_DIR}/libproot.so"
 
 mkdir -p "${TARGET_DIR}"
 
-# Source 1: proot-distro project (Termux community maintained)
-PROOT_URL="https://github.com/nicebug/android-openclaw/releases/download/proot-v5.4.0/proot-aarch64-static"
+# Source: skirsten/proot-portable-android-binaries (Termux-based, CI-built, statically linked)
+PROOT_URL="https://skirsten.github.io/proot-portable-android-binaries/aarch64/proot"
 
 echo "Downloading proot static binary..."
 if curl -fsSL -o "${TARGET_FILE}" "${PROOT_URL}"; then

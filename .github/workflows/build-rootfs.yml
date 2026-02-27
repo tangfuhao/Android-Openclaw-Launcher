@@ -1,0 +1,59 @@
+name: Build Debian Rootfs
+
+on:
+  workflow_dispatch:
+    inputs:
+      rootfs_version:
+        description: 'Rootfs version tag (e.g. v0.1.0)'
+        required: true
+        default: 'v0.1.0'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            debootstrap \
+            qemu-user-static \
+            binfmt-support \
+            xz-utils
+
+      - name: Verify binfmt_misc for aarch64
+        run: |
+          ls /proc/sys/fs/binfmt_misc/qemu-aarch64 || \
+            sudo update-binfmts --enable qemu-aarch64
+          cat /proc/sys/fs/binfmt_misc/qemu-aarch64
+
+      - name: Build rootfs
+        run: sudo bash scripts/build-rootfs.sh
+
+      - name: Show rootfs info
+        run: |
+          ls -lh rootfs-aarch64.tar.xz
+          sha256sum rootfs-aarch64.tar.xz
+
+      - name: Create Release and Upload
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: rootfs-${{ github.event.inputs.rootfs_version }}
+          name: "Debian Rootfs ${{ github.event.inputs.rootfs_version }}"
+          body: |
+            Debian bookworm (arm64) rootfs with Node.js 22 LTS + OpenClaw pre-installed.
+
+            **Included:**
+            - Debian bookworm (minimal)
+            - Node.js 22 LTS + npm
+            - OpenClaw (via npm global)
+            - git, python3, make, curl, wget, jq, vim-tiny
+
+            **Usage:** Download `rootfs-aarch64.tar.xz` and update `ROOTFS_URL` in `app/build.gradle.kts`.
+          files: rootfs-aarch64.tar.xz
+          draft: false
+          prerelease: false

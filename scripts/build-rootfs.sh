@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
 #
-# Builds a minimal Debian aarch64 rootfs with Node.js and OpenClaw pre-installed.
-# Intended to run on a CI server (x86_64 Linux with qemu-user-static for cross-arch).
+# Builds a minimal Debian aarch64 rootfs with Node.js 22 and OpenClaw pre-installed.
+# Designed to run on x86_64 Linux (GitHub Actions) using QEMU user-mode emulation.
 #
-# Prerequisites:
+# Prerequisites (Ubuntu):
 #   sudo apt install debootstrap qemu-user-static binfmt-support xz-utils
 #
 # Usage:
 #   sudo ./scripts/build-rootfs.sh
 #
 # Output:
-#   rootfs-aarch64.tar.xz  (~200MB compressed)
+#   rootfs-aarch64.tar.xz  (typically 150-250MB)
 
 set -euo pipefail
 
@@ -20,23 +20,25 @@ MIRROR="http://deb.debian.org/debian"
 ROOTFS_DIR="$(mktemp -d)/rootfs"
 OUTPUT="rootfs-aarch64.tar.xz"
 
-echo "=== Stage 1: debootstrap ==="
+echo "=== Stage 1: debootstrap (first stage, cross-arch) ==="
 debootstrap \
     --arch="${ARCH}" \
+    --foreign \
     --variant=minbase \
     --include=apt,bash,coreutils,findutils,grep,sed,gawk,tar,gzip,xz-utils,ca-certificates,curl,wget,git,procps,net-tools,openssh-client \
     "${SUITE}" \
     "${ROOTFS_DIR}" \
     "${MIRROR}"
 
-echo "=== Stage 2: Configure inside chroot ==="
-# Copy qemu static binary for cross-arch execution
+echo "=== Stage 2: debootstrap (second stage, via QEMU) ==="
 cp /usr/bin/qemu-aarch64-static "${ROOTFS_DIR}/usr/bin/"
+chroot "${ROOTFS_DIR}" /usr/bin/qemu-aarch64-static /bin/bash -c \
+    '/debootstrap/debootstrap --second-stage'
 
+echo "=== Stage 3: Install Node.js + OpenClaw ==="
 chroot "${ROOTFS_DIR}" /usr/bin/qemu-aarch64-static /bin/bash -c '
 set -euo pipefail
 
-# Configure apt sources with https
 cat > /etc/apt/sources.list << SOURCES
 deb http://deb.debian.org/debian bookworm main contrib
 deb http://deb.debian.org/debian bookworm-updates main contrib
@@ -45,19 +47,18 @@ SOURCES
 
 apt-get update
 
-# Install Node.js LTS via NodeSource
+# Node.js 22 LTS via NodeSource
 curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
 apt-get install -y nodejs
 
-# Verify node + npm
 node --version
 npm --version
 
-# Install OpenClaw globally
-npm install -g openclaw
+# OpenClaw AI assistant
+npm install -g openclaw@latest
 
-# Install commonly useful tools for the AI agent
-apt-get install -y \
+# Commonly needed tools for AI agent workflows
+apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     make \
@@ -65,31 +66,25 @@ apt-get install -y \
     vim-tiny \
     jq
 
-# DNS resolver config (will be overwritten by the app, but good default)
+# DNS
 cat > /etc/resolv.conf << DNS
 nameserver 8.8.8.8
 nameserver 8.8.4.4
 DNS
 
-# Clean up to reduce image size
+# Shrink image
 apt-get clean
-rm -rf /var/lib/apt/lists/*
-rm -rf /var/cache/apt/archives/*
-rm -rf /tmp/*
-rm -rf /var/tmp/*
-rm -rf /usr/share/doc/*
-rm -rf /usr/share/man/*
-rm -rf /usr/share/info/*
-rm -rf /usr/share/locale/*
+rm -rf /var/lib/apt/lists/* /var/cache/apt/archives/* \
+       /tmp/* /var/tmp/* \
+       /usr/share/doc/* /usr/share/man/* /usr/share/info/* /usr/share/locale/*
 '
 
-echo "=== Stage 3: Cleanup ==="
-# Remove qemu static binary (not needed at runtime; proot handles execution)
+echo "=== Stage 4: Cleanup ==="
 rm -f "${ROOTFS_DIR}/usr/bin/qemu-aarch64-static"
 
-echo "=== Stage 4: Compress ==="
+echo "=== Stage 5: Compress ==="
 cd "$(dirname "${ROOTFS_DIR}")"
-tar cJf "${OLDPWD}/${OUTPUT}" -C "${ROOTFS_DIR}" .
+XZ_OPT="-T0 -6" tar cJf "${OLDPWD}/${OUTPUT}" -C "${ROOTFS_DIR}" .
 
 ROOTFS_SIZE=$(du -sh "${ROOTFS_DIR}" | cut -f1)
 OUTPUT_SIZE=$(du -sh "${OLDPWD}/${OUTPUT}" | cut -f1)
@@ -99,5 +94,3 @@ echo "=== Build complete ==="
 echo "  Rootfs size (uncompressed): ${ROOTFS_SIZE}"
 echo "  Archive size (compressed):  ${OUTPUT_SIZE}"
 echo "  Output: ${OUTPUT}"
-echo ""
-echo "Upload this file to GitHub Releases and update ROOTFS_URL in build.gradle.kts"
