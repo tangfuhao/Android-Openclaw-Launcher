@@ -52,15 +52,20 @@ class RootfsInstaller(
         }
 
         try {
-            _state.value = RootfsState.Downloading(0f, 0, 0)
-
             val archiveFile = File(context.cacheDir, OpenClawConstants.ROOTFS_FILE_NAME)
-            downloader.download(rootfsUrl, archiveFile) { progress ->
-                _state.value = RootfsState.Downloading(
-                    progress.fraction,
-                    progress.bytesDownloaded,
-                    progress.totalBytes,
-                )
+
+            if (archiveFile.exists() && archiveFile.length() > 10_000_000) {
+                Log.i(TAG, "Cached archive found (${archiveFile.length()} bytes), skipping download")
+                _state.value = RootfsState.Downloading(1f, archiveFile.length(), archiveFile.length())
+            } else {
+                _state.value = RootfsState.Downloading(0f, 0, 0)
+                downloader.download(rootfsUrl, archiveFile) { progress ->
+                    _state.value = RootfsState.Downloading(
+                        progress.fraction,
+                        progress.bytesDownloaded,
+                        progress.totalBytes,
+                    )
+                }
             }
 
             _state.value = RootfsState.Extracting(0f)
@@ -91,6 +96,7 @@ class RootfsInstaller(
 
     private suspend fun extractRootfs(archive: File, destination: File) = withContext(Dispatchers.IO) {
         destination.mkdirs()
+        val destCanonical = destination.canonicalPath
 
         val rawInput = BufferedInputStream(FileInputStream(archive), 65536)
         val decompressed = if (archive.name.endsWith(".tar.xz")) {
@@ -104,6 +110,11 @@ class RootfsInstaller(
             var entry = tar.nextEntry
             while (entry != null) {
                 val outFile = File(destination, entry.name)
+
+                if (!outFile.canonicalPath.startsWith(destCanonical)) {
+                    entry = tar.nextEntry
+                    continue
+                }
 
                 when {
                     entry.isDirectory -> outFile.mkdirs()
