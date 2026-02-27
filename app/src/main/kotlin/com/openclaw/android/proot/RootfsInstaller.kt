@@ -1,6 +1,7 @@
 package com.openclaw.android.proot
 
 import android.content.Context
+import android.system.Os
 import android.util.Log
 import com.openclaw.android.core.OpenClawConstants
 import com.openclaw.android.data.PreferencesManager
@@ -9,7 +10,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
+import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
+import org.apache.commons.compress.compressors.xz.XZCompressorInputStream
+import java.io.BufferedInputStream
 import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
 
 /**
  * Orchestrates the full Debian rootfs installation:
@@ -86,31 +92,62 @@ class RootfsInstaller(
     private suspend fun extractRootfs(archive: File, destination: File) = withContext(Dispatchers.IO) {
         destination.mkdirs()
 
-        val isXz = archive.name.endsWith(".tar.xz")
-        val tarFlag = if (isXz) "xJf" else "xzf"
-
-        val tarBinary = "/system/bin/tar"
-        if (File(tarBinary).exists()) {
-            val process = ProcessBuilder(
-                tarBinary, tarFlag, archive.absolutePath,
-                "-C", destination.absolutePath,
-            ).redirectErrorStream(true).start()
-
-            val exitCode = process.waitFor()
-            if (exitCode != 0) {
-                val stderr = process.inputStream.bufferedReader().readText()
-                throw RuntimeException("tar extraction failed (exit $exitCode): $stderr")
-            }
+        val rawInput = BufferedInputStream(FileInputStream(archive), 65536)
+        val decompressed = if (archive.name.endsWith(".tar.xz")) {
+            XZCompressorInputStream(rawInput)
         } else {
-            throw RuntimeException(
-                "System tar not available. Cannot extract rootfs archive."
-            )
+            java.util.zip.GZIPInputStream(rawInput)
         }
+
+        var entryCount = 0
+        TarArchiveInputStream(decompressed).use { tar ->
+            var entry = tar.nextEntry
+            while (entry != null) {
+                val outFile = File(destination, entry.name)
+
+                when {
+                    entry.isDirectory -> outFile.mkdirs()
+
+                    entry.isSymbolicLink -> {
+                        outFile.parentFile?.mkdirs()
+                        outFile.delete()
+                        Os.symlink(entry.linkName, outFile.absolutePath)
+                    }
+
+                    entry.isLink -> {
+                        outFile.parentFile?.mkdirs()
+                        val linkTarget = File(destination, entry.linkName)
+                        outFile.delete()
+                        Os.symlink(linkTarget.absolutePath, outFile.absolutePath)
+                    }
+
+                    else -> {
+                        outFile.parentFile?.mkdirs()
+                        FileOutputStream(outFile).use { fos -> tar.copyTo(fos) }
+                        applyPermissions(outFile, entry.mode)
+                    }
+                }
+
+                entryCount++
+                if (entryCount % 500 == 0) {
+                    Log.d(TAG, "Extracted $entryCount entries...")
+                }
+
+                entry = tar.nextEntry
+            }
+        }
+        Log.i(TAG, "Extraction complete: $entryCount entries")
+    }
+
+    /** Map tar entry mode bits to Java file permissions. */
+    private fun applyPermissions(file: File, mode: Int) {
+        file.setReadable(mode and 0b100_000_000 != 0, false)
+        file.setWritable(mode and 0b010_000_000 != 0, false)
+        file.setExecutable(mode and 0b001_000_000 != 0, false)
     }
 
     private fun configureRootfs() {
         writeResolvConf()
-        setExecutablePermissions()
         createProotTmpDir()
     }
 
@@ -125,18 +162,6 @@ class RootfsInstaller(
                 appendLine("nameserver 1.1.1.1")
             }
         )
-    }
-
-    /** Recursively make all files in bin/, sbin/, lib/ executable. */
-    private fun setExecutablePermissions() {
-        val execDirs = listOf("usr/bin", "usr/sbin", "usr/lib", "usr/libexec", "bin", "sbin")
-            .map { File(paths.rootfs, it) }
-        execDirs.filter { it.exists() }.forEach { dir ->
-            dir.walkTopDown().filter { it.isFile }.forEach { file ->
-                file.setExecutable(true, false)
-                file.setReadable(true, false)
-            }
-        }
     }
 
     private fun createProotTmpDir() {

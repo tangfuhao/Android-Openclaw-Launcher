@@ -20,7 +20,7 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        buildConfigField("String", "ROOTFS_URL", "\"https://github.com/tangfuhao/Android-Openclaw-Launcher/releases/download/rootfs-v0.1.0/rootfs-aarch64.tar.xz\"")
+        buildConfigField("String", "ROOTFS_URL", "\"https://download.macaron.chat/apk/rootfs-aarch64.tar.xz\"")
         buildConfigField("String", "GATEWAY_HOST", "\"127.0.0.1\"")
         buildConfigField("int", "GATEWAY_PORT", "18789")
     }
@@ -87,6 +87,10 @@ dependencies {
     // Kotlin
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.coroutines.android)
+
+    // Archive extraction
+    implementation(libs.commons.compress)
+    implementation(libs.xz)
 
     // Termux terminal components
     implementation(libs.termux.terminal.view)

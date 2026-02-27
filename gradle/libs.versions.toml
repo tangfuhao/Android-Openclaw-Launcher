@@ -13,6 +13,8 @@ activity-compose = "1.9.3"
 navigation-compose = "2.8.5"
 datastore = "1.1.1"
 hilt-navigation-compose = "1.2.0"
+commons-compress = "1.27.1"
+xz = "1.10"
 
 [libraries]
 # Compose BOM
@@ -46,6 +48,10 @@ okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhtt
 # Kotlin
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
 kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "kotlinx-coroutines" }
+
+# Archive extraction (pure Java, no system binary dependency)
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commons-compress" }
+xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 
 # Termux (via JitPack)
 termux-terminal-view = { group = "com.github.termux.termux-app", name = "terminal-view", version = "v0.118.1" }
