@@ -18,7 +18,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -121,7 +120,7 @@ class OpenClawService : Service() {
 
     private fun observeProcessState() {
         serviceScope.launch {
-            processManager.processState.collectLatest { state ->
+            processManager.processState.collect { state ->
                 when (state) {
                     is ProcessManager.ProcessState.Running -> {
                         updateNotification("OpenClaw is running")

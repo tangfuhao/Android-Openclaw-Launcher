@@ -50,8 +50,11 @@ fun ChatScreen(viewModel: ChatViewModel = hiltViewModel()) {
     val listState = rememberLazyListState()
     var inputText by rememberSaveable { mutableStateOf("") }
 
-    // Auto-scroll to bottom when new messages arrive
-    LaunchedEffect(messages.size) {
+    val lastMessage = messages.lastOrNull()
+    val scrollTrigger = lastMessage?.let { "${it.id}-${it.content.length}" }
+
+    // Auto-scroll when new messages arrive or streaming content grows
+    LaunchedEffect(messages.size, scrollTrigger) {
         if (messages.isNotEmpty()) {
             listState.animateScrollToItem(messages.size - 1)
         }

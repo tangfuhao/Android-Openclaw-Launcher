@@ -128,8 +128,10 @@ class RootfsInstaller(
                     entry.isLink -> {
                         outFile.parentFile?.mkdirs()
                         val linkTarget = File(destination, entry.linkName)
+                        val relativePath = outFile.parentFile!!.toPath()
+                            .relativize(linkTarget.toPath()).toString()
                         outFile.delete()
-                        Os.symlink(linkTarget.absolutePath, outFile.absolutePath)
+                        Os.symlink(relativePath, outFile.absolutePath)
                     }
 
                     else -> {

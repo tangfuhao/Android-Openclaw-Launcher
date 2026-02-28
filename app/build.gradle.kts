@@ -95,4 +95,11 @@ dependencies {
     // Termux terminal components
     implementation(libs.termux.terminal.view)
     implementation(libs.termux.terminal.emulator)
+
+    // Testing
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.mockk)
+    testImplementation(libs.okhttp.mockwebserver)
+    testImplementation(libs.kotlinx.serialization.json)
 }

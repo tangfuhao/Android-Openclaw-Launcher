@@ -1,21 +1,32 @@
 package com.openclaw.android.ui.setup
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -27,6 +38,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.openclaw.android.data.PreferencesManager.ApiProvider
+import com.openclaw.android.data.PreferencesManager.ApiType
 import com.openclaw.android.proot.RootfsState
 
 @Composable
@@ -213,14 +226,26 @@ private fun DownloadPage(rootfsState: RootfsState, viewModel: SetupViewModel) {
     }
 }
 
+private val SETUP_PROVIDERS = listOf(ApiProvider.ANTHROPIC, ApiProvider.OPENAI, ApiProvider.OPENROUTER)
+
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun ApiKeyPage(viewModel: SetupViewModel) {
+    var selectedProvider by rememberSaveable { mutableStateOf(ApiProvider.ANTHROPIC.name) }
     var apiKey by rememberSaveable { mutableStateOf("") }
+    var baseUrl by rememberSaveable { mutableStateOf("") }
+    var apiType by rememberSaveable { mutableStateOf("") }
+    var showAdvanced by rememberSaveable { mutableStateOf(false) }
+
+    val provider = ApiProvider.valueOf(selectedProvider)
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.Center,
-        modifier = Modifier.fillMaxSize(),
+        verticalArrangement = Arrangement.Top,
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(top = 48.dp),
     ) {
         Text(
             text = "Configure AI Provider",
@@ -233,19 +258,75 @@ private fun ApiKeyPage(viewModel: SetupViewModel) {
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        Spacer(modifier = Modifier.height(32.dp))
+        Spacer(modifier = Modifier.height(24.dp))
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            SETUP_PROVIDERS.forEach { p ->
+                FilterChip(
+                    selected = provider == p,
+                    onClick = {
+                        selectedProvider = p.name
+                        apiKey = ""
+                        baseUrl = ""
+                        apiType = ""
+                        showAdvanced = false
+                    },
+                    label = { Text(p.displayName) },
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(24.dp))
 
         OutlinedTextField(
             value = apiKey,
             onValueChange = { apiKey = it },
-            label = { Text("Anthropic API Key (sk-ant-...)") },
+            label = { Text("API Key") },
+            placeholder = { Text(providerKeyHint(provider)) },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
 
+        Spacer(modifier = Modifier.height(8.dp))
+
+        TextButton(onClick = { showAdvanced = !showAdvanced }) {
+            Text(if (showAdvanced) "Hide Advanced" else "Advanced (Custom Base URL)")
+        }
+
+        AnimatedVisibility(visible = showAdvanced) {
+            Column {
+                OutlinedTextField(
+                    value = baseUrl,
+                    onValueChange = { baseUrl = it },
+                    label = { Text("Base URL") },
+                    placeholder = { Text("https://your-relay.example.com/v1") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                ApiTypeDropdown(
+                    selectedType = apiType.ifBlank { defaultApiType(provider) },
+                    onTypeSelected = { apiType = it },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
+
         Spacer(modifier = Modifier.height(32.dp))
+
         Button(
-            onClick = { viewModel.saveApiKey(apiKey) },
+            onClick = {
+                viewModel.saveProviderConfig(
+                    provider = provider,
+                    apiKey = apiKey,
+                    baseUrl = baseUrl,
+                    apiType = if (showAdvanced && baseUrl.isNotBlank()) {
+                        apiType.ifBlank { defaultApiType(provider) }
+                    } else "",
+                )
+            },
             modifier = Modifier.fillMaxWidth(0.6f),
             enabled = apiKey.isNotBlank(),
         ) {
@@ -259,6 +340,61 @@ private fun ApiKeyPage(viewModel: SetupViewModel) {
             Text("Skip for Now")
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ApiTypeDropdown(
+    selectedType: String,
+    onTypeSelected: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val options = listOf(
+        ApiType.ANTHROPIC_MESSAGES to "Anthropic Messages",
+        ApiType.OPENAI_COMPLETIONS to "OpenAI Completions",
+    )
+    val displayText = options.firstOrNull { it.first == selectedType }?.second ?: selectedType
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = it },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = displayText,
+            onValueChange = {},
+            readOnly = true,
+            label = { Text("API Type") },
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                .fillMaxWidth(),
+        )
+        ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            options.forEach { (value, label) ->
+                DropdownMenuItem(
+                    text = { Text(label) },
+                    onClick = {
+                        onTypeSelected(value)
+                        expanded = false
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun providerKeyHint(provider: ApiProvider): String = when (provider) {
+    ApiProvider.ANTHROPIC -> "sk-ant-..."
+    ApiProvider.OPENAI -> "sk-..."
+    ApiProvider.OPENROUTER -> "sk-or-..."
+    ApiProvider.GOOGLE -> "AIza..."
+}
+
+private fun defaultApiType(provider: ApiProvider): String = when (provider) {
+    ApiProvider.ANTHROPIC -> ApiType.ANTHROPIC_MESSAGES
+    else -> ApiType.OPENAI_COMPLETIONS
 }
 
 @Composable

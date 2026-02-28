@@ -61,7 +61,9 @@ class FileDownloader(private val httpClient: OkHttpClient) {
                     }
                 }
             }
-            tempFile.renameTo(destination)
+            if (!tempFile.renameTo(destination)) {
+                throw IOException("Failed to rename ${tempFile.path} to ${destination.path}")
+            }
             destination
         } catch (e: Exception) {
             tempFile.delete()

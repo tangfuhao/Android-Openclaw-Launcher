@@ -2,11 +2,12 @@ package com.openclaw.android.gateway
 
 import android.util.Log
 import com.openclaw.android.core.OpenClawConstants
+import com.openclaw.android.data.PreferencesManager
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -15,6 +16,9 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -35,12 +39,16 @@ import java.util.concurrent.ConcurrentHashMap
  * Manages the full lifecycle: connect -> handshake -> operate -> disconnect.
  * Provides typed APIs for chat, approvals, and tool catalog queries.
  */
-class GatewayClient(private val httpClient: OkHttpClient) {
+class GatewayClient(
+    private val httpClient: OkHttpClient,
+    private val preferencesManager: PreferencesManager,
+) {
 
     companion object {
         private const val TAG = "GatewayClient"
         private const val RECONNECT_DELAY_MS = 3_000L
         private const val MAX_RECONNECT_ATTEMPTS = 10
+        private const val REQUEST_TIMEOUT_MS = 30_000L
     }
 
     private val json = Json {
@@ -52,6 +60,8 @@ class GatewayClient(private val httpClient: OkHttpClient) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var webSocket: WebSocket? = null
     private var reconnectAttempt = 0
+    private var reconnectJob: Job? = null
+    private val connectMutex = Mutex()
 
     private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<GatewayResponse>>()
 
@@ -84,13 +94,12 @@ class GatewayClient(private val httpClient: OkHttpClient) {
 
     fun disconnect() {
         reconnectAttempt = MAX_RECONNECT_ATTEMPTS // prevent auto-reconnect
+        reconnectJob?.cancel()
+        reconnectJob = null
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         _connectionState.value = GatewayState.Disconnected("Client initiated")
-        pendingRequests.values.forEach {
-            it.completeExceptionally(IllegalStateException("Disconnected"))
-        }
-        pendingRequests.clear()
+        failAllPendingRequests("Disconnected")
     }
 
     /**
@@ -110,7 +119,12 @@ class GatewayClient(private val httpClient: OkHttpClient) {
             throw IllegalStateException("WebSocket not connected")
         }
 
-        return deferred.await()
+        return try {
+            withTimeout(REQUEST_TIMEOUT_MS) { deferred.await() }
+        } catch (e: Exception) {
+            pendingRequests.remove(id)
+            throw e
+        }
     }
 
     /** Fire-and-forget: sends a request without waiting for a response. */
@@ -183,7 +197,7 @@ class GatewayClient(private val httpClient: OkHttpClient) {
     private suspend fun performHandshake(challengePayload: JsonObject) {
         val challenge = json.decodeFromJsonElement(ConnectChallenge.serializer(), challengePayload)
 
-        val deviceId = "android-${android.os.Build.MODEL.replace(" ", "-")}-${UUID.randomUUID().toString().take(8)}"
+        val deviceId = preferencesManager.getOrCreateDeviceId()
 
         val connectParams = ConnectParams(
             client = ClientInfo(),
@@ -233,6 +247,12 @@ class GatewayClient(private val httpClient: OkHttpClient) {
         }
     }
 
+    private fun failAllPendingRequests(reason: String) {
+        val error = IllegalStateException(reason)
+        pendingRequests.values.forEach { it.completeExceptionally(error) }
+        pendingRequests.clear()
+    }
+
     private fun scheduleReconnect() {
         if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
             _connectionState.value = GatewayState.Error("Max reconnect attempts reached")
@@ -240,14 +260,18 @@ class GatewayClient(private val httpClient: OkHttpClient) {
         }
 
         reconnectAttempt++
+        failAllPendingRequests("Connection lost, reconnecting")
         _connectionState.value = GatewayState.Reconnecting
         val delayMs = RECONNECT_DELAY_MS * reconnectAttempt.coerceAtMost(5)
         Log.i(TAG, "Scheduling reconnect attempt $reconnectAttempt in ${delayMs}ms")
 
-        scope.launch {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
             delay(delayMs)
-            if (_connectionState.value is GatewayState.Reconnecting) {
-                connect()
+            connectMutex.withLock {
+                if (_connectionState.value is GatewayState.Reconnecting) {
+                    connect()
+                }
             }
         }
     }

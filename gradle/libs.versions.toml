@@ -15,6 +15,10 @@ datastore = "1.1.1"
 hilt-navigation-compose = "1.2.0"
 commons-compress = "1.27.1"
 xz = "1.10"
+junit = "4.13.2"
+kotlinx-coroutines-test = "1.9.0"
+mockk = "1.13.13"
+okhttp-mockwebserver = "4.12.0"
 
 [libraries]
 # Compose BOM
@@ -56,6 +60,12 @@ xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
 # Termux (via JitPack)
 termux-terminal-view = { group = "com.github.termux.termux-app", name = "terminal-view", version = "v0.118.1" }
 termux-terminal-emulator = { group = "com.github.termux.termux-app", name = "terminal-emulator", version = "v0.118.1" }
+
+# Testing
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "kotlinx-coroutines-test" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+okhttp-mockwebserver = { group = "com.squareup.okhttp3", name = "mockwebserver", version.ref = "okhttp-mockwebserver" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

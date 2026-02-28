@@ -10,14 +10,18 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.openclaw.android.BuildConfig
 import com.openclaw.android.data.PreferencesManager
+import com.openclaw.android.data.PreferencesManager.ApiProvider
+import com.openclaw.android.proot.OpenClawConfigWriter
 import com.openclaw.android.proot.RootfsInstaller
 import com.openclaw.android.proot.RootfsState
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 @HiltViewModel
@@ -25,6 +29,7 @@ class SetupViewModel @Inject constructor(
     @ApplicationContext private val context: Context,
     private val rootfsInstaller: RootfsInstaller,
     private val preferencesManager: PreferencesManager,
+    private val configWriter: OpenClawConfigWriter,
 ) : ViewModel() {
 
     private val _currentStep = MutableStateFlow(SetupStep.WELCOME)
@@ -55,14 +60,22 @@ class SetupViewModel @Inject constructor(
         }
     }
 
-    fun saveApiKey(key: String) {
+    fun saveProviderConfig(
+        provider: ApiProvider,
+        apiKey: String,
+        baseUrl: String = "",
+        apiType: String = "",
+    ) {
         viewModelScope.launch {
-            if (key.startsWith("sk-ant-")) {
-                preferencesManager.setApiKey(PreferencesManager.ApiProvider.ANTHROPIC, key)
-            } else if (key.startsWith("sk-")) {
-                preferencesManager.setApiKey(PreferencesManager.ApiProvider.OPENAI, key)
-            } else {
-                preferencesManager.setApiKey(PreferencesManager.ApiProvider.ANTHROPIC, key)
+            preferencesManager.setApiKey(provider, apiKey)
+            if (baseUrl.isNotBlank()) {
+                preferencesManager.setBaseUrl(provider, baseUrl)
+            }
+            if (apiType.isNotBlank()) {
+                preferencesManager.setApiType(provider, apiType)
+            }
+            withContext(Dispatchers.IO) {
+                configWriter.writeConfig()
             }
             nextStep()
         }

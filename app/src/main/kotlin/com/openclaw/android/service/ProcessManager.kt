@@ -3,12 +3,15 @@ package com.openclaw.android.service
 import android.content.Context
 import android.util.Log
 import com.openclaw.android.core.OpenClawConstants
+import com.openclaw.android.proot.OpenClawConfigWriter
 import com.openclaw.android.proot.ProotExecutor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.BufferedReader
 import java.io.InputStreamReader
@@ -24,14 +27,17 @@ class ProcessManager(
     private val context: Context,
     private val paths: OpenClawConstants.Paths,
     private val prootExecutor: ProotExecutor,
+    private val configWriter: OpenClawConfigWriter,
 ) {
     companion object {
         private const val TAG = "ProcessManager"
         private const val LOG_BUFFER_MAX_LINES = 500
     }
 
+    @Volatile
     private var gatewayProcess: Process? = null
     private val restartCount = AtomicInteger(0)
+    private val lifecycleMutex = Mutex()
 
     private val _processState = MutableStateFlow<ProcessState>(ProcessState.Stopped)
     val processState: StateFlow<ProcessState> = _processState.asStateFlow()
@@ -69,6 +75,9 @@ class ProcessManager(
         try {
             _processState.value = ProcessState.Starting
 
+            configWriter.writeConfig()
+            Log.i(TAG, "openclaw.json written before gateway launch")
+
             val innerCommand = listOf(
                 OpenClawConstants.INNER_NODE_BINARY,
                 OpenClawConstants.INNER_OPENCLAW_ENTRY,
@@ -95,7 +104,7 @@ class ProcessManager(
 
             restartCount.set(0)
             _processState.value = ProcessState.Running
-            Log.i(TAG, "Gateway process started (pid: ${process.pid()})")
+            Log.i(TAG, "Gateway process started (pid: ${process.extractPid()})")
             true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start gateway", e)
@@ -128,14 +137,14 @@ class ProcessManager(
      * Attempts to restart the gateway with exponential backoff.
      * Returns false if max retries exceeded.
      */
-    suspend fun restartWithBackoff(): Boolean {
+    suspend fun restartWithBackoff(): Boolean = lifecycleMutex.withLock {
         val attempt = restartCount.incrementAndGet()
         if (attempt > OpenClawConstants.PROCESS_RESTART_MAX_RETRIES) {
             Log.e(TAG, "Max restart attempts ($attempt) exceeded")
             _processState.value = ProcessState.Error(
                 "Gateway crashed repeatedly ($attempt times). Manual restart required."
             )
-            return false
+            return@withLock false
         }
 
         val delayMs = OpenClawConstants.PROCESS_RESTART_BASE_DELAY_MS * (1L shl (attempt - 1).coerceAtMost(4))
@@ -144,7 +153,7 @@ class ProcessManager(
 
         stopGateway()
         delay(delayMs)
-        return startGateway()
+        startGateway()
     }
 
     fun resetRestartCount() {
@@ -183,10 +192,12 @@ class ProcessManager(
         _logLines.value = (_logLines.value + line).takeLast(LOG_BUFFER_MAX_LINES)
     }
 
-    private fun Process.pid(): Long {
+    private fun Process.extractPid(): Long {
         return try {
-            pid().toLong()
-        } catch (_: Exception) {
+            val field = this.javaClass.getDeclaredField("pid")
+            field.isAccessible = true
+            field.getInt(this).toLong()
+        } catch (_: Throwable) {
             -1L
         }
     }

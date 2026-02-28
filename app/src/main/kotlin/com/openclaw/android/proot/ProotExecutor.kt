@@ -13,10 +13,12 @@ import java.io.File
  * - Locating the proot binary shipped as a native library
  * - Building the correct --rootfs, --bind, and --cwd arguments
  * - Setting up environment variables for both proot and the inner process
+ * - Injecting API keys read from [OpenClawConfigWriter]
  */
 class ProotExecutor(
     private val context: Context,
     private val paths: OpenClawConstants.Paths,
+    private val configWriter: OpenClawConfigWriter,
 ) {
     companion object {
         private const val TAG = "ProotExecutor"
@@ -53,6 +55,7 @@ class ProotExecutor(
     /**
      * Environment variables for the proot host process.
      * These are set on the ProcessBuilder; proot forwards relevant ones into the guest.
+     * Includes API keys from user preferences for the OpenClaw gateway.
      */
     fun buildEnvironment(): Map<String, String> = buildMap {
         put("HOME", OpenClawConstants.INNER_HOME)
@@ -65,6 +68,8 @@ class ProotExecutor(
         put("OPENCLAW_HOME", "/root/.openclaw")
         put("OPENCLAW_DATA", "/root/.openclaw/data")
         put("OPENCLAW_GATEWAY_PORT", OpenClawConstants.GATEWAY_PORT.toString())
+
+        putAll(configWriter.getApiKeyEnvVars())
     }
 
     /**

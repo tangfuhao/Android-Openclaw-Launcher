@@ -33,6 +33,7 @@ class HealthMonitor(private val gatewayClient: GatewayClient) {
     fun start(scope: CoroutineScope, onUnhealthy: suspend () -> Unit) {
         this.onUnhealthy = onUnhealthy
         stop()
+        lastHealthyTimestamp = System.currentTimeMillis()
 
         monitorJob = scope.launch {
             Log.i(TAG, "Health monitor started")

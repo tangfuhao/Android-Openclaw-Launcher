@@ -5,6 +5,7 @@ import com.openclaw.android.core.OpenClawConstants
 import com.openclaw.android.data.PreferencesManager
 import com.openclaw.android.gateway.GatewayClient
 import com.openclaw.android.proot.FileDownloader
+import com.openclaw.android.proot.OpenClawConfigWriter
 import com.openclaw.android.proot.ProotExecutor
 import com.openclaw.android.proot.RootfsInstaller
 import com.openclaw.android.service.HealthMonitor
@@ -53,11 +54,21 @@ object AppModule {
 
     @Provides
     @Singleton
+    fun provideOpenClawConfigWriter(
+        paths: OpenClawConstants.Paths,
+        preferencesManager: PreferencesManager,
+    ): OpenClawConfigWriter {
+        return OpenClawConfigWriter(paths, preferencesManager)
+    }
+
+    @Provides
+    @Singleton
     fun provideProotExecutor(
         @ApplicationContext context: Context,
         paths: OpenClawConstants.Paths,
+        configWriter: OpenClawConfigWriter,
     ): ProotExecutor {
-        return ProotExecutor(context, paths)
+        return ProotExecutor(context, paths, configWriter)
     }
 
     @Provides
@@ -77,14 +88,18 @@ object AppModule {
         @ApplicationContext context: Context,
         paths: OpenClawConstants.Paths,
         prootExecutor: ProotExecutor,
+        configWriter: OpenClawConfigWriter,
     ): ProcessManager {
-        return ProcessManager(context, paths, prootExecutor)
+        return ProcessManager(context, paths, prootExecutor, configWriter)
     }
 
     @Provides
     @Singleton
-    fun provideGatewayClient(okHttpClient: OkHttpClient): GatewayClient {
-        return GatewayClient(okHttpClient)
+    fun provideGatewayClient(
+        okHttpClient: OkHttpClient,
+        preferencesManager: PreferencesManager,
+    ): GatewayClient {
+        return GatewayClient(okHttpClient, preferencesManager)
     }
 
     @Provides
