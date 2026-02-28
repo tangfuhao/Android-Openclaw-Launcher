@@ -120,4 +120,91 @@ class GatewayProtocolTest {
         assertEquals("AUTH_FAILED", error.code)
         assertEquals("Invalid token", error.message)
     }
+
+    // --- New tests below ---
+
+    @Test
+    fun `GatewayRequest default type is req`() {
+        val req = GatewayRequest(id = "x", method = "test")
+        assertEquals("req", req.type)
+    }
+
+    @Test
+    fun `GatewayRequest default params is empty object`() {
+        val req = GatewayRequest(id = "x", method = "test")
+        assertEquals(JsonObject(emptyMap()), req.params)
+    }
+
+    @Test
+    fun `GatewayFrame minimal fields`() {
+        val raw = """{"type":"unknown"}"""
+        val frame = json.decodeFromString(GatewayFrame.serializer(), raw)
+        assertEquals("unknown", frame.type)
+        assertNull(frame.id)
+        assertNull(frame.ok)
+        assertNull(frame.event)
+        assertNull(frame.payload)
+        assertNull(frame.seq)
+    }
+
+    @Test
+    fun `ChatChunkPayload defaults done to false`() {
+        val raw = """{"messageId":"m1","delta":"hi"}"""
+        val chunk = json.decodeFromString(ChatChunkPayload.serializer(), raw)
+        assertEquals(false, chunk.done)
+    }
+
+    @Test
+    fun `ConnectParams default role is operator`() {
+        val params = ConnectParams(client = ClientInfo())
+        assertEquals("operator", params.role)
+    }
+
+    @Test
+    fun `ConnectParams default scopes`() {
+        val params = ConnectParams(client = ClientInfo())
+        assertEquals(
+            listOf("operator.read", "operator.write", "operator.approvals"),
+            params.scopes,
+        )
+    }
+
+    @Test
+    fun `DeviceInfo optional fields default to null`() {
+        val info = DeviceInfo(id = "dev-1")
+        assertNull(info.publicKey)
+        assertNull(info.signature)
+        assertNull(info.signedAt)
+        assertNull(info.nonce)
+    }
+
+    @Test
+    fun `ApprovalResolveParams round-trip`() {
+        val original = ApprovalResolveParams(requestId = "r1", approved = true, reason = "looks safe")
+        val text = json.encodeToString(ApprovalResolveParams.serializer(), original)
+        val decoded = json.decodeFromString(ApprovalResolveParams.serializer(), text)
+        assertEquals(original, decoded)
+    }
+
+    @Test
+    fun `ChatSendParams round-trip`() {
+        val original = ChatSendParams(text = "hello world", sessionKey = "custom")
+        val text = json.encodeToString(ChatSendParams.serializer(), original)
+        val decoded = json.decodeFromString(ChatSendParams.serializer(), text)
+        assertEquals(original, decoded)
+    }
+
+    @Test
+    fun `GatewayResponse with error`() {
+        val response = GatewayResponse(
+            id = "err-1",
+            ok = false,
+            error = JsonError(code = "RATE_LIMIT", message = "Too many requests"),
+        )
+        val text = json.encodeToString(GatewayResponse.serializer(), response)
+        val decoded = json.decodeFromString(GatewayResponse.serializer(), text)
+        assertEquals(false, decoded.ok)
+        assertEquals("RATE_LIMIT", decoded.error?.code)
+        assertEquals("Too many requests", decoded.error?.message)
+    }
 }
