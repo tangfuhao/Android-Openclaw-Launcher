@@ -83,7 +83,8 @@ class ProcessManager(
                 OpenClawConstants.INNER_OPENCLAW_ENTRY,
                 "gateway",
                 "--port", OpenClawConstants.GATEWAY_PORT.toString(),
-                "--bind", OpenClawConstants.GATEWAY_HOST,
+                "--bind", "loopback",
+                "--allow-unconfigured",
             )
 
             Log.i(TAG, "Starting gateway via proot: ${innerCommand.joinToString(" ")}")
@@ -101,6 +102,12 @@ class ProcessManager(
                 _processState.value = ProcessState.Error(msg)
                 return@withContext false
             }
+
+            // The gateway overwrites openclaw.json on startup with its own
+            // defaults. Re-apply our config (model, env) after it has initialized.
+            delay(2000)
+            configWriter.writeConfig()
+            Log.i(TAG, "Re-applied openclaw.json after gateway startup")
 
             restartCount.set(0)
             _processState.value = ProcessState.Running

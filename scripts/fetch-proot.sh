@@ -1,45 +1,73 @@
 #!/usr/bin/env bash
 #
-# Downloads a pre-compiled static proot binary for aarch64 and places it
-# in the correct jniLibs location so it gets packaged into the APK.
+# Downloads the latest Termux proot binary and its libtalloc dependency
+# for aarch64, placing them in jniLibs so they get packaged into the APK.
 #
-# The binary is renamed to libproot.so because Android only extracts
-# files matching lib*.so from the native library directory. This ensures
-# proot is always executable (native lib dir is exempt from W^X restrictions).
+# The binaries are renamed to lib*.so because Android only extracts
+# files matching lib*.so from the native library directory.
 #
 # Usage:
 #   ./scripts/fetch-proot.sh
-#
-# The script tries multiple sources in order of preference.
 
 set -euo pipefail
 
 TARGET_DIR="app/src/main/jniLibs/arm64-v8a"
-TARGET_FILE="${TARGET_DIR}/libproot.so"
+PROOT_FILE="${TARGET_DIR}/libproot.so"
+PROOT_LOADER_FILE="${TARGET_DIR}/libproot_loader.so"
+TALLOC_FILE="${TARGET_DIR}/libtalloc.so"
+
+PROOT_DEB_URL="https://packages.termux.dev/apt/termux-main/pool/main/p/proot/proot_5.1.107-70_aarch64.deb"
+TALLOC_DEB_URL="https://packages.termux.dev/apt/termux-main/pool/main/libt/libtalloc/libtalloc_2.4.3_aarch64.deb"
 
 mkdir -p "${TARGET_DIR}"
 
-# Source: skirsten/proot-portable-android-binaries (Termux-based, CI-built, statically linked)
-PROOT_URL="https://skirsten.github.io/proot-portable-android-binaries/aarch64/proot"
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
 
-echo "Downloading proot static binary..."
-if curl -fsSL -o "${TARGET_FILE}" "${PROOT_URL}"; then
-    chmod +x "${TARGET_FILE}"
-    echo "proot binary saved to ${TARGET_FILE}"
-    file "${TARGET_FILE}"
-    echo "Done."
-    exit 0
-fi
+extract_deb_data() {
+    local deb_file="$1"
+    local out_dir="$2"
+    python3 -c "
+import sys, os
+with open('$deb_file', 'rb') as f:
+    f.read(8)  # ar magic
+    while True:
+        header = f.read(60)
+        if len(header) < 60: break
+        name = header[:16].strip().decode().rstrip('/')
+        size = int(header[48:58].strip())
+        data = f.read(size)
+        if size % 2: f.read(1)
+        if name == 'data.tar.xz':
+            with open('$out_dir/data.tar.xz', 'wb') as out:
+                out.write(data)
+            break
+"
+    (cd "$out_dir" && xz -d data.tar.xz && tar xf data.tar)
+}
+
+echo "Downloading Termux proot package..."
+curl -fsSL -o "${WORK_DIR}/proot.deb" "${PROOT_DEB_URL}"
+mkdir -p "${WORK_DIR}/proot"
+extract_deb_data "${WORK_DIR}/proot.deb" "${WORK_DIR}/proot"
+cp "${WORK_DIR}/proot/data/data/com.termux/files/usr/bin/proot" "${PROOT_FILE}"
+chmod +x "${PROOT_FILE}"
+echo "proot binary saved to ${PROOT_FILE}"
+file "${PROOT_FILE}"
+
+cp "${WORK_DIR}/proot/data/data/com.termux/files/usr/libexec/proot/loader" "${PROOT_LOADER_FILE}"
+chmod +x "${PROOT_LOADER_FILE}"
+echo "proot loader saved to ${PROOT_LOADER_FILE}"
+file "${PROOT_LOADER_FILE}"
 
 echo ""
-echo "ERROR: Failed to download proot binary."
+echo "Downloading Termux libtalloc package..."
+curl -fsSL -o "${WORK_DIR}/talloc.deb" "${TALLOC_DEB_URL}"
+mkdir -p "${WORK_DIR}/talloc"
+extract_deb_data "${WORK_DIR}/talloc.deb" "${WORK_DIR}/talloc"
+cp "${WORK_DIR}/talloc/data/data/com.termux/files/usr/lib/libtalloc.so.2."* "${TALLOC_FILE}"
+echo "libtalloc saved to ${TALLOC_FILE}"
+file "${TALLOC_FILE}"
+
 echo ""
-echo "To build proot from source:"
-echo "  1. Clone https://github.com/proot-me/proot"
-echo "  2. Cross-compile for aarch64 with static linking:"
-echo "     make -C src loader.elf loader-m32.elf proot"
-echo "  3. Copy the static binary to ${TARGET_FILE}"
-echo ""
-echo "Or download a pre-built static binary from a trusted source"
-echo "and place it at ${TARGET_FILE}"
-exit 1
+echo "Done. Both proot and libtalloc are ready in ${TARGET_DIR}/"

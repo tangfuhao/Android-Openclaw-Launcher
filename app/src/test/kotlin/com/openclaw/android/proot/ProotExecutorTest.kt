@@ -140,7 +140,7 @@ class ProotExecutorTest {
     @Test
     fun `buildEnvironment includes OPENCLAW vars`() {
         val env = executor.buildEnvironment()
-        assertEquals("/root/.openclaw", env["OPENCLAW_HOME"])
+        assertEquals("/root", env["OPENCLAW_HOME"])
         assertEquals("/root/.openclaw/data", env["OPENCLAW_DATA"])
         assertEquals(OpenClawConstants.GATEWAY_PORT.toString(), env["OPENCLAW_GATEWAY_PORT"])
     }

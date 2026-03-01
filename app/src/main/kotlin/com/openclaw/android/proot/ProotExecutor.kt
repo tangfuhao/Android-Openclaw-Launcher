@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.openclaw.android.core.OpenClawConstants
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Constructs proot command lines and launches processes inside the Debian rootfs.
@@ -23,14 +24,77 @@ class ProotExecutor(
     companion object {
         private const val TAG = "ProotExecutor"
         private const val PROOT_LIB_NAME = "libproot.so"
+        private const val PROOT_LOADER_LIB_NAME = "libproot_loader.so"
     }
+
+    private val nativeLibDir: String
+        get() = context.applicationInfo.nativeLibraryDir
 
     /** Absolute path to the proot binary extracted by Android from the APK's jniLibs. */
     val prootBinaryPath: String
-        get() = context.applicationInfo.nativeLibraryDir + "/" + PROOT_LIB_NAME
+        get() = "$nativeLibDir/$PROOT_LIB_NAME"
 
     /** Whether the proot binary is available for execution. */
     fun isAvailable(): Boolean = File(prootBinaryPath).exists()
+
+    /**
+     * Writes a Node.js preload script that patches APIs broken inside proot
+     * (e.g. os.networkInterfaces which fails with EACCES on Android).
+     */
+    private fun ensureNodePreload() {
+        val preloadDir = File(paths.rootfs, "root/.openclaw")
+        preloadDir.mkdirs()
+        val preloadFile = File(preloadDir, "node-preload.cjs")
+        if (preloadFile.exists()) return
+
+        preloadFile.writeText(
+            """
+            'use strict';
+            const os = require('os');
+            const origNI = os.networkInterfaces;
+            os.networkInterfaces = function() {
+              try { return origNI.call(os); }
+              catch (_) {
+                return { lo: [{ address: '127.0.0.1', netmask: '255.0.0.0',
+                  family: 'IPv4', mac: '00:00:00:00:00:00', internal: true,
+                  cidr: '127.0.0.1/8' }] };
+              }
+            };
+            """.trimIndent() + "\n"
+        )
+        Log.i(TAG, "Node preload script written to ${preloadFile.absolutePath}")
+    }
+
+    /**
+     * The Termux-built proot links against libtalloc.so.2, but Android only extracts
+     * libtalloc.so. Create a versioned symlink so the dynamic linker can find it.
+     */
+    private fun ensureTallocSymlink() {
+        val tallocSo = File(nativeLibDir, "libtalloc.so")
+        if (!tallocSo.exists()) return
+
+        val linkDir = File(paths.root, "lib")
+        linkDir.mkdirs()
+        val link = File(linkDir, "libtalloc.so.2")
+        val linkPath = link.toPath()
+
+        val needsUpdate = if (Files.isSymbolicLink(linkPath)) {
+            Files.readSymbolicLink(linkPath) != tallocSo.toPath()
+        } else {
+            !link.exists()
+        }
+
+        if (needsUpdate) {
+            link.delete()
+            try {
+                Files.createSymbolicLink(linkPath, tallocSo.toPath())
+                Log.i(TAG, "Created libtalloc.so.2 symlink -> ${tallocSo.absolutePath}")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to create libtalloc symlink, copying instead", e)
+                tallocSo.copyTo(link, overwrite = true)
+            }
+        }
+    }
 
     /**
      * Builds the full command-line array for running [innerCommand] inside proot.
@@ -64,8 +128,13 @@ class ProotExecutor(
         put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
         put("TMPDIR", paths.prootTmp.absolutePath)
         put("PROOT_TMP_DIR", paths.prootTmp.absolutePath)
+        put("PROOT_LOADER", "$nativeLibDir/$PROOT_LOADER_LIB_NAME")
+        put("NODE_OPTIONS", "--require=/root/.openclaw/node-preload.cjs")
 
-        put("OPENCLAW_HOME", "/root/.openclaw")
+        val tallocLibDir = File(paths.root, "lib").absolutePath
+        put("LD_LIBRARY_PATH", "$nativeLibDir:$tallocLibDir")
+
+        put("OPENCLAW_HOME", "/root")
         put("OPENCLAW_DATA", "/root/.openclaw/data")
         put("OPENCLAW_GATEWAY_PORT", OpenClawConstants.GATEWAY_PORT.toString())
 
@@ -79,6 +148,9 @@ class ProotExecutor(
         innerCommand: List<String>,
         cwd: String = OpenClawConstants.INNER_HOME,
     ): Process {
+        ensureNodePreload()
+        ensureTallocSymlink()
+
         val command = buildCommand(innerCommand, cwd)
         val env = buildEnvironment()
 

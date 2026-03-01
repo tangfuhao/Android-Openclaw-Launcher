@@ -4,7 +4,6 @@ import android.util.Log
 import com.openclaw.android.core.OpenClawConstants
 import com.openclaw.android.data.PreferencesManager
 import com.openclaw.android.data.PreferencesManager.ApiProvider
-import com.openclaw.android.data.PreferencesManager.ApiType
 import com.openclaw.android.data.PreferencesManager.ProviderConfig
 import io.mockk.every
 import io.mockk.mockk
@@ -54,53 +53,50 @@ class OpenClawConfigWriterTest {
         every { preferencesManager.getProviderConfigsSync() } returns configs
     }
 
-    private fun standardConfig(apiKey: String) = ProviderConfig(
-        apiKey = apiKey, baseUrl = "", apiType = "",
-    )
+    private fun allProvidersEmpty(): Map<ApiProvider, ProviderConfig> =
+        ApiProvider.entries.associateWith { ProviderConfig(apiKey = "") }
 
-    private fun customConfig(apiKey: String, baseUrl: String, apiType: String = "") = ProviderConfig(
-        apiKey = apiKey, baseUrl = baseUrl, apiType = apiType,
-    )
+    private fun withKeys(vararg pairs: Pair<ApiProvider, String>): Map<ApiProvider, ProviderConfig> {
+        val base = allProvidersEmpty().toMutableMap()
+        for ((provider, key) in pairs) {
+            base[provider] = ProviderConfig(apiKey = key)
+        }
+        return base
+    }
 
     // --- getApiKeyEnvVars ---
 
     @Test
     fun `getApiKeyEnvVars returns standard provider keys`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to standardConfig("sk-ant"),
-            ApiProvider.OPENAI to standardConfig(""),
-            ApiProvider.GOOGLE to standardConfig("gk-123"),
-            ApiProvider.OPENROUTER to standardConfig(""),
+        mockConfigs(withKeys(
+            ApiProvider.ANTHROPIC to "sk-ant",
+            ApiProvider.GOOGLE to "gk-123",
         ))
 
         val vars = writer.getApiKeyEnvVars()
         assertEquals("sk-ant", vars["ANTHROPIC_API_KEY"])
-        assertEquals("gk-123", vars["GOOGLE_API_KEY"])
+        assertEquals("gk-123", vars["GEMINI_API_KEY"])
         assertEquals(2, vars.size)
     }
 
     @Test
-    fun `getApiKeyEnvVars excludes custom base URL providers`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to customConfig("sk-ant", "https://custom.api.com"),
-            ApiProvider.OPENAI to standardConfig("sk-oai"),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
+    fun `getApiKeyEnvVars includes CN provider keys`() {
+        mockConfigs(withKeys(
+            ApiProvider.MINIMAX_CN to "cn-key",
+            ApiProvider.ZAI to "zai-key",
+            ApiProvider.KIMI_CODING to "kimi-key",
         ))
 
         val vars = writer.getApiKeyEnvVars()
-        assertFalse(vars.containsKey("ANTHROPIC_API_KEY"))
-        assertEquals("sk-oai", vars["OPENAI_API_KEY"])
+        assertEquals("cn-key", vars["MINIMAX_CN_API_KEY"])
+        assertEquals("zai-key", vars["ZAI_API_KEY"])
+        assertEquals("kimi-key", vars["KIMI_API_KEY"])
+        assertEquals(3, vars.size)
     }
 
     @Test
     fun `getApiKeyEnvVars excludes providers without key`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to standardConfig(""),
-            ApiProvider.OPENAI to standardConfig(""),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
-        ))
+        mockConfigs(allProvidersEmpty())
 
         val vars = writer.getApiKeyEnvVars()
         assertTrue(vars.isEmpty())
@@ -115,30 +111,25 @@ class OpenClawConfigWriterTest {
 
     @Test
     fun `getApiKeyEnvVars maps correct env var names`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to standardConfig("a"),
-            ApiProvider.OPENAI to standardConfig("b"),
-            ApiProvider.GOOGLE to standardConfig("c"),
-            ApiProvider.OPENROUTER to standardConfig("d"),
-        ))
+        val configs = ApiProvider.entries.associateWith { ProviderConfig(apiKey = "key-${it.name}") }
+        mockConfigs(configs)
 
         val vars = writer.getApiKeyEnvVars()
         assertTrue(vars.containsKey("ANTHROPIC_API_KEY"))
         assertTrue(vars.containsKey("OPENAI_API_KEY"))
-        assertTrue(vars.containsKey("GOOGLE_API_KEY"))
+        assertTrue(vars.containsKey("GEMINI_API_KEY"))
         assertTrue(vars.containsKey("OPENROUTER_API_KEY"))
+        assertTrue(vars.containsKey("MINIMAX_CN_API_KEY"))
+        assertTrue(vars.containsKey("ZAI_API_KEY"))
+        assertTrue(vars.containsKey("KIMI_API_KEY"))
     }
 
     // --- writeConfig ---
 
     @Test
     fun `writeConfig creates config file`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to standardConfig("sk-ant"),
-            ApiProvider.OPENAI to standardConfig(""),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
-        ))
+        mockConfigs(withKeys(ApiProvider.ANTHROPIC to "sk-ant"))
+        every { preferencesManager.getSelectedModelSync() } returns ""
 
         writer.writeConfig()
 
@@ -148,12 +139,8 @@ class OpenClawConfigWriterTest {
 
     @Test
     fun `writeConfig writes valid JSON`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to standardConfig("sk-ant"),
-            ApiProvider.OPENAI to standardConfig(""),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
-        ))
+        mockConfigs(withKeys(ApiProvider.ANTHROPIC to "sk-ant"))
+        every { preferencesManager.getSelectedModelSync() } returns ""
 
         writer.writeConfig()
 
@@ -163,13 +150,12 @@ class OpenClawConfigWriterTest {
     }
 
     @Test
-    fun `writeConfig includes env block for standard providers`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to standardConfig("sk-ant"),
-            ApiProvider.OPENAI to standardConfig("sk-oai"),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
+    fun `writeConfig includes env block for all providers with keys`() {
+        mockConfigs(withKeys(
+            ApiProvider.ANTHROPIC to "sk-ant",
+            ApiProvider.OPENAI to "sk-oai",
         ))
+        every { preferencesManager.getSelectedModelSync() } returns ""
 
         writer.writeConfig()
 
@@ -180,85 +166,36 @@ class OpenClawConfigWriterTest {
     }
 
     @Test
-    fun `writeConfig includes models providers for custom URL`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to customConfig("sk-ant", "https://proxy.example.com", "anthropic-messages"),
-            ApiProvider.OPENAI to standardConfig(""),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
-        ))
-
-        writer.writeConfig()
-
-        val json = JSONObject(File(paths.hostOpenclawConfig, "openclaw.json").readText())
-        assertTrue(json.has("models"))
-        val providers = json.getJSONObject("models").getJSONObject("providers")
-        assertTrue(providers.has("anthropic-custom"))
-        assertEquals("https://proxy.example.com", providers.getJSONObject("anthropic-custom").getString("baseUrl"))
-    }
-
-    @Test
-    fun `writeConfig handles mixed standard and custom providers`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to standardConfig("sk-ant"),
-            ApiProvider.OPENAI to customConfig("sk-oai", "https://oai-proxy.com", "openai-completions"),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
-        ))
-
-        writer.writeConfig()
-
-        val json = JSONObject(File(paths.hostOpenclawConfig, "openclaw.json").readText())
-        assertTrue(json.has("env"))
-        assertTrue(json.has("models"))
-        assertEquals("sk-ant", json.getJSONObject("env").getString("ANTHROPIC_API_KEY"))
-    }
-
-    @Test
     fun `writeConfig skips providers without API key`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to standardConfig(""),
-            ApiProvider.OPENAI to standardConfig(""),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
-        ))
+        mockConfigs(allProvidersEmpty())
+        every { preferencesManager.getSelectedModelSync() } returns ""
 
         writer.writeConfig()
 
         val json = JSONObject(File(paths.hostOpenclawConfig, "openclaw.json").readText())
         assertFalse(json.has("env"))
-        assertFalse(json.has("models"))
     }
 
     @Test
-    fun `writeConfig uses default apiType when blank`() {
-        mockConfigs(mapOf(
-            ApiProvider.ANTHROPIC to customConfig("sk-ant", "https://proxy.com", ""),
-            ApiProvider.OPENAI to standardConfig(""),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
-        ))
+    fun `writeConfig writes selected model`() {
+        mockConfigs(withKeys(ApiProvider.ZAI to "zai-key"))
+        every { preferencesManager.getSelectedModelSync() } returns "zai/glm-4.5"
 
         writer.writeConfig()
 
         val json = JSONObject(File(paths.hostOpenclawConfig, "openclaw.json").readText())
-        val provider = json.getJSONObject("models").getJSONObject("providers").getJSONObject("anthropic-custom")
-        assertEquals(ApiType.ANTHROPIC_MESSAGES, provider.getString("api"))
+        val model = json.getJSONObject("agents").getJSONObject("defaults").getJSONObject("model")
+        assertEquals("zai/glm-4.5", model.getString("primary"))
     }
 
     @Test
-    fun `writeConfig uses explicit apiType when set`() {
-        mockConfigs(mapOf(
-            ApiProvider.OPENAI to customConfig("sk-oai", "https://proxy.com", "openai-completions"),
-            ApiProvider.ANTHROPIC to standardConfig(""),
-            ApiProvider.GOOGLE to standardConfig(""),
-            ApiProvider.OPENROUTER to standardConfig(""),
-        ))
+    fun `writeConfig sets gateway mode to local`() {
+        mockConfigs(allProvidersEmpty())
+        every { preferencesManager.getSelectedModelSync() } returns ""
 
         writer.writeConfig()
 
         val json = JSONObject(File(paths.hostOpenclawConfig, "openclaw.json").readText())
-        val provider = json.getJSONObject("models").getJSONObject("providers").getJSONObject("openai-custom")
-        assertEquals("openai-completions", provider.getString("api"))
+        assertEquals("local", json.getJSONObject("gateway").getString("mode"))
     }
 }

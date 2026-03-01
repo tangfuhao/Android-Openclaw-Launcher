@@ -56,7 +56,6 @@ class SetupViewModelStepTest {
 
         every { rootfsInstaller.state } returns MutableStateFlow(RootfsState.NotInstalled)
 
-        // Mock Android system services for checkDevice() called in init
         val am = mockk<ActivityManager>(relaxed = true)
         every { context.getSystemService(Context.ACTIVITY_SERVICE) } returns am
 
@@ -98,8 +97,8 @@ class SetupViewModelStepTest {
     @Test
     fun `nextStep from DEVICE_CHECK goes to DOWNLOAD`() = runTest {
         advanceUntilIdle()
-        viewModel.nextStep() // WELCOME -> DEVICE_CHECK
-        viewModel.nextStep() // DEVICE_CHECK -> DOWNLOAD
+        viewModel.nextStep()
+        viewModel.nextStep()
         assertEquals(SetupStep.DOWNLOAD, viewModel.currentStep.value)
     }
 
@@ -135,7 +134,6 @@ class SetupViewModelStepTest {
 
         viewModel.saveProviderConfig(ApiProvider.ANTHROPIC, apiKey = "sk-test")
         advanceUntilIdle()
-        // Allow IO dispatcher coroutine to complete
         Thread.sleep(200)
         advanceUntilIdle()
 
@@ -144,21 +142,25 @@ class SetupViewModelStepTest {
     }
 
     @Test
-    fun `saveProviderConfig saves baseUrl when not blank`() = runTest {
+    fun `saveProviderConfig saves model when provided`() = runTest {
         advanceUntilIdle()
-        viewModel.saveProviderConfig(ApiProvider.OPENAI, apiKey = "k", baseUrl = "https://proxy.com")
+        viewModel.saveProviderConfig(
+            ApiProvider.MINIMAX_CN,
+            apiKey = "cn-key",
+            model = "minimax-cn/MiniMax-M2.5",
+        )
         advanceUntilIdle()
 
-        coVerify { preferencesManager.setBaseUrl(ApiProvider.OPENAI, "https://proxy.com") }
+        coVerify { preferencesManager.setSelectedModel("minimax-cn/MiniMax-M2.5") }
     }
 
     @Test
-    fun `saveProviderConfig skips baseUrl when blank`() = runTest {
+    fun `saveProviderConfig skips model when blank`() = runTest {
         advanceUntilIdle()
-        viewModel.saveProviderConfig(ApiProvider.OPENAI, apiKey = "k", baseUrl = "")
+        viewModel.saveProviderConfig(ApiProvider.OPENAI, apiKey = "k", model = "")
         advanceUntilIdle()
 
-        coVerify(exactly = 0) { preferencesManager.setBaseUrl(any(), any()) }
+        coVerify(exactly = 0) { preferencesManager.setSelectedModel(any()) }
     }
 
     @Test

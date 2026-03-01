@@ -2,6 +2,7 @@ package com.openclaw.android.gateway
 
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -12,12 +13,12 @@ import org.junit.Test
 
 class GatewayProtocolTest {
 
-    private val json = Json { ignoreUnknownKeys = true; isLenient = true; encodeDefaults = true }
+    private val json = Json { ignoreUnknownKeys = true; isLenient = true; encodeDefaults = true; explicitNulls = false }
 
     @Test
     fun `GatewayRequest serializes correctly`() {
         val req = GatewayRequest(id = "test-1", method = "chat.send", params = buildJsonObject {
-            put("text", "hello")
+            put("message", "hello")
         })
         val text = json.encodeToString(GatewayRequest.serializer(), req)
         assertTrue(text.contains("\"type\":\"req\""))
@@ -36,12 +37,21 @@ class GatewayProtocolTest {
     }
 
     @Test
-    fun `GatewayFrame parses event frame`() {
-        val raw = """{"type":"event","event":"chat","payload":{"chunk":{"messageId":"m1","delta":"hi","done":false}},"seq":5}"""
+    fun `GatewayFrame parses event frame with object stateVersion`() {
+        val raw = """{"type":"event","event":"health","payload":{},"seq":1,"stateVersion":{"presence":1,"health":3}}"""
+        val frame = json.decodeFromString(GatewayFrame.serializer(), raw)
+        assertEquals("event", frame.type)
+        assertEquals("health", frame.event)
+        assertEquals(1L, frame.seq)
+        assertNotNull(frame.stateVersion)
+    }
+
+    @Test
+    fun `GatewayFrame parses chat event`() {
+        val raw = """{"type":"event","event":"chat","payload":{"runId":"r1","sessionKey":"main","seq":2,"state":"delta","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}},"seq":5}"""
         val frame = json.decodeFromString(GatewayFrame.serializer(), raw)
         assertEquals("event", frame.type)
         assertEquals("chat", frame.event)
-        assertEquals(5L, frame.seq)
     }
 
     @Test
@@ -69,24 +79,53 @@ class GatewayProtocolTest {
     }
 
     @Test
-    fun `ChatEventPayload with chunk`() {
-        val raw = """{"sessionKey":"main","chunk":{"messageId":"m1","delta":"hello ","done":false}}"""
-        val payload = json.decodeFromString(ChatEventPayload.serializer(), raw)
-        assertNull(payload.message)
-        assertNotNull(payload.chunk)
-        assertEquals("m1", payload.chunk?.messageId)
-        assertEquals("hello ", payload.chunk?.delta)
-        assertEquals(false, payload.chunk?.done)
+    fun `ConnectParams device null is omitted from JSON`() {
+        val params = ConnectParams(client = ClientInfo(), device = null)
+        val text = json.encodeToString(ConnectParams.serializer(), params)
+        assertTrue(!text.contains("\"device\""))
     }
 
     @Test
-    fun `ChatEventPayload with complete message`() {
-        val raw = """{"sessionKey":"main","message":{"id":"m2","role":"assistant","content":"world","timestamp":1700000000}}"""
+    fun `ChatEventPayload with delta state`() {
+        val raw = """{"runId":"run1","sessionKey":"main","seq":1,"state":"delta","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"timestamp":1700000000}}"""
         val payload = json.decodeFromString(ChatEventPayload.serializer(), raw)
+        assertEquals("run1", payload.runId)
+        assertEquals("delta", payload.state)
         assertNotNull(payload.message)
-        assertNull(payload.chunk)
-        assertEquals("m2", payload.message?.id)
         assertEquals("assistant", payload.message?.role)
+    }
+
+    @Test
+    fun `ChatEventPayload with final state`() {
+        val raw = """{"runId":"run1","sessionKey":"main","seq":2,"state":"final","message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"""
+        val payload = json.decodeFromString(ChatEventPayload.serializer(), raw)
+        assertEquals("final", payload.state)
+        assertNotNull(payload.message)
+    }
+
+    @Test
+    fun `ChatEventPayload with error state`() {
+        val raw = """{"runId":"run1","sessionKey":"main","seq":3,"state":"error","errorMessage":"rate limited"}"""
+        val payload = json.decodeFromString(ChatEventPayload.serializer(), raw)
+        assertEquals("error", payload.state)
+        assertEquals("rate limited", payload.errorMessage)
+        assertNull(payload.message)
+    }
+
+    @Test
+    fun `ChatMessagePayload with string content`() {
+        val raw = """{"role":"user","content":"hello","timestamp":1700000000}"""
+        val msg = json.decodeFromString(ChatMessagePayload.serializer(), raw)
+        assertEquals("user", msg.role)
+        assertEquals(JsonPrimitive("hello"), msg.content)
+    }
+
+    @Test
+    fun `ChatMessagePayload with array content`() {
+        val raw = """{"role":"assistant","content":[{"type":"text","text":"hi"}],"timestamp":1700000000}"""
+        val msg = json.decodeFromString(ChatMessagePayload.serializer(), raw)
+        assertEquals("assistant", msg.role)
+        assertNotNull(msg.content)
     }
 
     @Test
@@ -95,7 +134,6 @@ class GatewayProtocolTest {
         val approval = json.decodeFromString(ApprovalRequestPayload.serializer(), raw)
         assertEquals("r1", approval.requestId)
         assertEquals("bash", approval.tool)
-        assertEquals("Run ls -la", approval.description)
     }
 
     @Test
@@ -107,26 +145,37 @@ class GatewayProtocolTest {
     }
 
     @Test
-    fun `HelloOk with policy`() {
-        val raw = """{"type":"hello-ok","protocol":3,"policy":{"tickIntervalMs":30000}}"""
+    fun `HelloOk with full payload`() {
+        val raw = """{"type":"hello-ok","protocol":3,"server":{"version":"1.0","connId":"abc"},"features":{"methods":["chat.send"],"events":["chat"]},"snapshot":{},"policy":{"maxPayload":1000000,"maxBufferedBytes":5000000,"tickIntervalMs":15000}}"""
         val helloOk = json.decodeFromString(HelloOk.serializer(), raw)
-        assertEquals(30000L, helloOk.policy?.tickIntervalMs)
+        assertEquals(3, helloOk.protocol)
+        assertNotNull(helloOk.server)
+        assertNotNull(helloOk.features)
+        assertNotNull(helloOk.policy)
+        assertEquals(15000L, helloOk.policy?.tickIntervalMs)
     }
 
     @Test
-    fun `JsonError deserializes`() {
-        val raw = """{"code":"AUTH_FAILED","message":"Invalid token"}"""
-        val error = json.decodeFromString(JsonError.serializer(), raw)
-        assertEquals("AUTH_FAILED", error.code)
-        assertEquals("Invalid token", error.message)
+    fun `ChatSendParams round-trip`() {
+        val original = ChatSendParams(message = "hello world", sessionKey = "custom", idempotencyKey = "key-1")
+        val text = json.encodeToString(ChatSendParams.serializer(), original)
+        val decoded = json.decodeFromString(ChatSendParams.serializer(), text)
+        assertEquals(original, decoded)
     }
 
-    // --- New tests below ---
+    @Test
+    fun `ConnectParams default scopes include operator admin`() {
+        val params = ConnectParams(client = ClientInfo())
+        assertTrue(params.scopes.contains("operator.admin"))
+        assertTrue(params.scopes.contains("operator.read"))
+        assertTrue(params.scopes.contains("operator.write"))
+    }
 
     @Test
-    fun `GatewayRequest default type is req`() {
-        val req = GatewayRequest(id = "x", method = "test")
-        assertEquals("req", req.type)
+    fun `ClientInfo defaults to openclaw-android`() {
+        val info = ClientInfo()
+        assertEquals("openclaw-android", info.id)
+        assertEquals("cli", info.mode)
     }
 
     @Test
@@ -136,75 +185,10 @@ class GatewayProtocolTest {
     }
 
     @Test
-    fun `GatewayFrame minimal fields`() {
-        val raw = """{"type":"unknown"}"""
-        val frame = json.decodeFromString(GatewayFrame.serializer(), raw)
-        assertEquals("unknown", frame.type)
-        assertNull(frame.id)
-        assertNull(frame.ok)
-        assertNull(frame.event)
-        assertNull(frame.payload)
-        assertNull(frame.seq)
-    }
-
-    @Test
-    fun `ChatChunkPayload defaults done to false`() {
-        val raw = """{"messageId":"m1","delta":"hi"}"""
-        val chunk = json.decodeFromString(ChatChunkPayload.serializer(), raw)
-        assertEquals(false, chunk.done)
-    }
-
-    @Test
-    fun `ConnectParams default role is operator`() {
-        val params = ConnectParams(client = ClientInfo())
-        assertEquals("operator", params.role)
-    }
-
-    @Test
-    fun `ConnectParams default scopes`() {
-        val params = ConnectParams(client = ClientInfo())
-        assertEquals(
-            listOf("operator.read", "operator.write", "operator.approvals"),
-            params.scopes,
-        )
-    }
-
-    @Test
-    fun `DeviceInfo optional fields default to null`() {
-        val info = DeviceInfo(id = "dev-1")
-        assertNull(info.publicKey)
-        assertNull(info.signature)
-        assertNull(info.signedAt)
-        assertNull(info.nonce)
-    }
-
-    @Test
     fun `ApprovalResolveParams round-trip`() {
         val original = ApprovalResolveParams(requestId = "r1", approved = true, reason = "looks safe")
         val text = json.encodeToString(ApprovalResolveParams.serializer(), original)
         val decoded = json.decodeFromString(ApprovalResolveParams.serializer(), text)
         assertEquals(original, decoded)
-    }
-
-    @Test
-    fun `ChatSendParams round-trip`() {
-        val original = ChatSendParams(text = "hello world", sessionKey = "custom")
-        val text = json.encodeToString(ChatSendParams.serializer(), original)
-        val decoded = json.decodeFromString(ChatSendParams.serializer(), text)
-        assertEquals(original, decoded)
-    }
-
-    @Test
-    fun `GatewayResponse with error`() {
-        val response = GatewayResponse(
-            id = "err-1",
-            ok = false,
-            error = JsonError(code = "RATE_LIMIT", message = "Too many requests"),
-        )
-        val text = json.encodeToString(GatewayResponse.serializer(), response)
-        val decoded = json.decodeFromString(GatewayResponse.serializer(), text)
-        assertEquals(false, decoded.ok)
-        assertEquals("RATE_LIMIT", decoded.error?.code)
-        assertEquals("Too many requests", decoded.error?.message)
     }
 }

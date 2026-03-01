@@ -42,7 +42,7 @@ data class GatewayEvent(
     val event: String,
     val payload: JsonElement = JsonObject(emptyMap()),
     val seq: Long? = null,
-    val stateVersion: Long? = null,
+    val stateVersion: JsonElement? = null,
 )
 
 // --- Generic incoming frame (for initial parsing) ---
@@ -58,7 +58,7 @@ data class GatewayFrame(
     val error: JsonElement? = null,
     val params: JsonObject? = null,
     val seq: Long? = null,
-    val stateVersion: Long? = null,
+    val stateVersion: JsonElement? = null,
 )
 
 @Serializable
@@ -78,11 +78,11 @@ data class ConnectParams(
     val maxProtocol: Int = 3,
     val client: ClientInfo,
     val role: String = "operator",
-    val scopes: List<String> = listOf("operator.read", "operator.write", "operator.approvals"),
+    val scopes: List<String> = listOf("operator.read", "operator.write", "operator.approvals", "operator.admin"),
     val caps: List<String> = emptyList(),
     val commands: List<String> = emptyList(),
     val permissions: JsonObject = JsonObject(emptyMap()),
-    val auth: AuthInfo? = null,
+    val auth: AuthInfo = AuthInfo(),
     val locale: String = "en-US",
     val userAgent: String = "android-openclaw/0.1.0",
     val device: DeviceInfo? = null,
@@ -90,10 +90,10 @@ data class ConnectParams(
 
 @Serializable
 data class ClientInfo(
-    val id: String = "android-openclaw",
+    val id: String = "openclaw-android",
     val version: String = "0.1.0",
     val platform: String = "android",
-    val mode: String = "operator",
+    val mode: String = "cli",
 )
 
 @Serializable
@@ -104,8 +104,8 @@ data class AuthInfo(
 @Serializable
 data class DeviceInfo(
     val id: String,
-    val publicKey: String? = null,
-    val signature: String? = null,
+    val publicKey: String = "",
+    val signature: String = "",
     val signedAt: Long? = null,
     val nonce: String? = null,
 )
@@ -114,12 +114,18 @@ data class DeviceInfo(
 data class HelloOk(
     val type: String = "hello-ok",
     val protocol: Int = 3,
+    val server: JsonElement? = null,
+    val features: JsonElement? = null,
+    val snapshot: JsonElement? = null,
+    val canvasHostUrl: String? = null,
     val policy: PolicyInfo? = null,
     val auth: HelloAuth? = null,
 )
 
 @Serializable
 data class PolicyInfo(
+    val maxPayload: Long? = null,
+    val maxBufferedBytes: Long? = null,
     val tickIntervalMs: Long = 15000,
 )
 
@@ -134,42 +140,36 @@ data class HelloAuth(
 
 @Serializable
 data class ChatSendParams(
-    val text: String,
+    val message: String,
     val sessionKey: String = "main",
+    val idempotencyKey: String,
 )
 
 @Serializable
 data class ChatHistoryParams(
     val sessionKey: String = "main",
     val limit: Int = 50,
-    val before: String? = null,
 )
 
-@Serializable
-data class ChatSubscribeParams(
-    val sessionKey: String = "main",
-)
-
+/**
+ * Chat event payload broadcast by the gateway.
+ * States: "delta" (streaming), "final" (complete), "error"
+ */
 @Serializable
 data class ChatEventPayload(
+    val runId: String? = null,
     val sessionKey: String? = null,
+    val seq: Int? = null,
+    val state: String? = null,
     val message: ChatMessagePayload? = null,
-    val chunk: ChatChunkPayload? = null,
+    val errorMessage: String? = null,
 )
 
 @Serializable
 data class ChatMessagePayload(
-    val id: String? = null,
     val role: String? = null,
-    val content: String? = null,
+    val content: JsonElement? = null,
     val timestamp: Long? = null,
-)
-
-@Serializable
-data class ChatChunkPayload(
-    val messageId: String? = null,
-    val delta: String? = null,
-    val done: Boolean = false,
 )
 
 // --- Approval types ---

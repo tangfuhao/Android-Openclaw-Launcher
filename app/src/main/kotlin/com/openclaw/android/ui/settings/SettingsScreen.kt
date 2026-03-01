@@ -1,6 +1,5 @@
 package com.openclaw.android.ui.settings
 
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -10,21 +9,25 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Key
-import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Card
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,24 +40,14 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.openclaw.android.data.PreferencesManager.ApiProvider
-import com.openclaw.android.data.PreferencesManager.ApiType
+import com.openclaw.android.data.PreferencesManager.ModelOption
 
 @Composable
 fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
     val processState by viewModel.processState.collectAsStateWithLifecycle()
     val backgroundEnabled by viewModel.backgroundEnabled.collectAsStateWithLifecycle()
-
-    val anthropicKey by viewModel.anthropicKey.collectAsStateWithLifecycle()
-    val openaiKey by viewModel.openaiKey.collectAsStateWithLifecycle()
-    val openrouterKey by viewModel.openrouterKey.collectAsStateWithLifecycle()
-
-    val anthropicBaseUrl by viewModel.anthropicBaseUrl.collectAsStateWithLifecycle()
-    val openaiBaseUrl by viewModel.openaiBaseUrl.collectAsStateWithLifecycle()
-    val openrouterBaseUrl by viewModel.openrouterBaseUrl.collectAsStateWithLifecycle()
-
-    val anthropicApiType by viewModel.anthropicApiType.collectAsStateWithLifecycle()
-    val openaiApiType by viewModel.openaiApiType.collectAsStateWithLifecycle()
-    val openrouterApiType by viewModel.openrouterApiType.collectAsStateWithLifecycle()
+    val apiKeys by viewModel.apiKeys.collectAsStateWithLifecycle()
+    val selectedModel by viewModel.selectedModel.collectAsStateWithLifecycle()
 
     Column(
         modifier = Modifier
@@ -98,45 +91,27 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
+        // --- Model Selection ---
+        SectionHeader("Model")
+        ModelSelector(
+            selectedModel = selectedModel,
+            apiKeys = apiKeys,
+            onModelSelected = { viewModel.setSelectedModel(it) },
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         // --- API Providers ---
         SectionHeader("API Providers")
 
-        ProviderCard(
-            name = "Anthropic (Claude)",
-            apiKey = anthropicKey,
-            baseUrl = anthropicBaseUrl,
-            apiType = anthropicApiType,
-            defaultApiType = ApiType.ANTHROPIC_MESSAGES,
-            onSave = { key, url, type ->
-                viewModel.saveProviderConfig(ApiProvider.ANTHROPIC, key, url, type)
-            },
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        ProviderCard(
-            name = "OpenAI (GPT)",
-            apiKey = openaiKey,
-            baseUrl = openaiBaseUrl,
-            apiType = openaiApiType,
-            defaultApiType = ApiType.OPENAI_COMPLETIONS,
-            onSave = { key, url, type ->
-                viewModel.saveProviderConfig(ApiProvider.OPENAI, key, url, type)
-            },
-        )
-
-        Spacer(modifier = Modifier.height(12.dp))
-
-        ProviderCard(
-            name = "OpenRouter",
-            apiKey = openrouterKey,
-            baseUrl = openrouterBaseUrl,
-            apiType = openrouterApiType,
-            defaultApiType = ApiType.OPENAI_COMPLETIONS,
-            onSave = { key, url, type ->
-                viewModel.saveProviderConfig(ApiProvider.OPENROUTER, key, url, type)
-            },
-        )
+        ApiProvider.entries.forEachIndexed { index, provider ->
+            if (index > 0) Spacer(modifier = Modifier.height(12.dp))
+            ProviderCard(
+                name = provider.displayName,
+                apiKey = apiKeys[provider] ?: "",
+                onSave = { key -> viewModel.saveProviderConfig(provider, key) },
+            )
+        }
 
         Spacer(modifier = Modifier.height(24.dp))
 
@@ -165,19 +140,93 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun ModelSelector(
+    selectedModel: String,
+    apiKeys: Map<ApiProvider, String>,
+    onModelSelected: (String) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+
+    val configuredProviders = ApiProvider.entries.filter { (apiKeys[it] ?: "").isNotBlank() }
+    val allModels: List<Pair<ApiProvider, ModelOption>> = configuredProviders.flatMap { provider ->
+        provider.availableModels.map { model -> provider to model }
+    }
+
+    val displayText = allModels
+        .firstOrNull { it.second.id == selectedModel }
+        ?.let { (provider, model) -> "${provider.displayName} / ${model.displayName}" }
+        ?: if (selectedModel.isNotBlank()) selectedModel else "Not configured"
+
+    Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            ExposedDropdownMenuBox(
+                expanded = expanded,
+                onExpandedChange = { expanded = it },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                OutlinedTextField(
+                    value = displayText,
+                    onValueChange = {},
+                    readOnly = true,
+                    label = { Text("Active Model") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded) },
+                    modifier = Modifier
+                        .menuAnchor(MenuAnchorType.PrimaryNotEditable)
+                        .fillMaxWidth(),
+                )
+                ExposedDropdownMenu(
+                    expanded = expanded,
+                    onDismissRequest = { expanded = false },
+                ) {
+                    if (allModels.isEmpty()) {
+                        DropdownMenuItem(
+                            text = {
+                                Text(
+                                    "Please configure an API key first",
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            },
+                            onClick = { expanded = false },
+                        )
+                    } else {
+                        allModels.forEach { (provider, model) ->
+                            val isSelected = model.id == selectedModel
+                            DropdownMenuItem(
+                                text = { Text("${provider.displayName} / ${model.displayName}") },
+                                onClick = {
+                                    onModelSelected(model.id)
+                                    expanded = false
+                                },
+                                trailingIcon = if (isSelected) {
+                                    { Icon(Icons.Default.Check, contentDescription = null) }
+                                } else null,
+                            )
+                        }
+                    }
+                }
+            }
+
+            if (configuredProviders.isEmpty()) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Fill in at least one API key below to select a model.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
 @Composable
 private fun ProviderCard(
     name: String,
     apiKey: String,
-    baseUrl: String,
-    apiType: String,
-    defaultApiType: String,
-    onSave: (apiKey: String, baseUrl: String, apiType: String) -> Unit,
+    onSave: (apiKey: String) -> Unit,
 ) {
     var localKey by remember(apiKey) { mutableStateOf(apiKey) }
-    var localBaseUrl by remember(baseUrl) { mutableStateOf(baseUrl) }
-    var localApiType by remember(apiType) { mutableStateOf(apiType) }
-    var showAdvanced by rememberSaveable { mutableStateOf(baseUrl.isNotBlank()) }
 
     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -188,7 +237,7 @@ private fun ProviderCard(
                 value = localKey,
                 onValueChange = {
                     localKey = it
-                    onSave(it, localBaseUrl, localApiType)
+                    onSave(it)
                 },
                 label = { Text("API Key") },
                 modifier = Modifier.fillMaxWidth(),
@@ -196,73 +245,6 @@ private fun ProviderCard(
                 visualTransformation = PasswordVisualTransformation(),
                 leadingIcon = { Icon(Icons.Default.Key, contentDescription = null) },
             )
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            TextButton(onClick = { showAdvanced = !showAdvanced }) {
-                Text(
-                    if (showAdvanced) "Hide Base URL" else "Custom Base URL",
-                    style = MaterialTheme.typography.labelMedium,
-                )
-            }
-
-            AnimatedVisibility(visible = showAdvanced) {
-                Column {
-                    OutlinedTextField(
-                        value = localBaseUrl,
-                        onValueChange = {
-                            localBaseUrl = it
-                            onSave(localKey, it, localApiType)
-                        },
-                        label = { Text("Base URL") },
-                        placeholder = { Text("https://your-relay.example.com/v1") },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = true,
-                        leadingIcon = { Icon(Icons.Default.Link, contentDescription = null) },
-                    )
-
-                    if (localBaseUrl.isNotBlank()) {
-                        Spacer(modifier = Modifier.height(8.dp))
-                        ApiTypeSelector(
-                            selectedType = localApiType.ifBlank { defaultApiType },
-                            onTypeSelected = {
-                                localApiType = it
-                                onSave(localKey, localBaseUrl, it)
-                            },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ApiTypeSelector(
-    selectedType: String,
-    onTypeSelected: (String) -> Unit,
-) {
-    val options = listOf(
-        ApiType.ANTHROPIC_MESSAGES to "Anthropic Messages",
-        ApiType.OPENAI_COMPLETIONS to "OpenAI Completions",
-    )
-
-    Column {
-        Text(
-            "API Compatibility",
-            style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Spacer(modifier = Modifier.height(4.dp))
-        options.forEach { (value, label) ->
-            val isSelected = selectedType == value
-            TextButton(onClick = { onTypeSelected(value) }) {
-                Text(
-                    text = "${if (isSelected) "\u25C9" else "\u25CB"} $label",
-                    color = if (isSelected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurface,
-                )
-            }
         }
     }
 }

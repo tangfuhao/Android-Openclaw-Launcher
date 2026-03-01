@@ -21,20 +21,6 @@ class PreferencesManager(private val context: Context) {
         val ROOTFS_VERSION = stringPreferencesKey("rootfs_version")
         val GATEWAY_AUTOSTART = booleanPreferencesKey("gateway_autostart")
         val BACKGROUND_ENABLED = booleanPreferencesKey("background_enabled")
-
-        val API_KEY_ANTHROPIC = stringPreferencesKey("api_key_anthropic")
-        val API_KEY_OPENAI = stringPreferencesKey("api_key_openai")
-        val API_KEY_GOOGLE = stringPreferencesKey("api_key_google")
-        val API_KEY_OPENROUTER = stringPreferencesKey("api_key_openrouter")
-
-        val BASE_URL_ANTHROPIC = stringPreferencesKey("base_url_anthropic")
-        val BASE_URL_OPENAI = stringPreferencesKey("base_url_openai")
-        val BASE_URL_OPENROUTER = stringPreferencesKey("base_url_openrouter")
-
-        val API_TYPE_ANTHROPIC = stringPreferencesKey("api_type_anthropic")
-        val API_TYPE_OPENAI = stringPreferencesKey("api_type_openai")
-        val API_TYPE_OPENROUTER = stringPreferencesKey("api_type_openrouter")
-
         val SELECTED_MODEL = stringPreferencesKey("selected_model")
         val SETUP_COMPLETED = booleanPreferencesKey("setup_completed")
         val DEVICE_ID = stringPreferencesKey("device_id")
@@ -67,80 +53,29 @@ class PreferencesManager(private val context: Context) {
 
     // --- API Keys ---
 
-    val anthropicApiKey: Flow<String> =
-        context.dataStore.data.map { it[Keys.API_KEY_ANTHROPIC] ?: "" }
-
-    val openaiApiKey: Flow<String> =
-        context.dataStore.data.map { it[Keys.API_KEY_OPENAI] ?: "" }
-
-    val googleApiKey: Flow<String> =
-        context.dataStore.data.map { it[Keys.API_KEY_GOOGLE] ?: "" }
-
-    val openrouterApiKey: Flow<String> =
-        context.dataStore.data.map { it[Keys.API_KEY_OPENROUTER] ?: "" }
+    /** Single reactive stream of all provider API keys. */
+    val allApiKeys: Flow<Map<ApiProvider, String>> =
+        context.dataStore.data.map { prefs ->
+            ApiProvider.entries.associateWith { prefs[it.preferencesKey] ?: "" }
+        }
 
     suspend fun setApiKey(provider: ApiProvider, key: String) {
         context.dataStore.edit { prefs ->
-            when (provider) {
-                ApiProvider.ANTHROPIC -> prefs[Keys.API_KEY_ANTHROPIC] = key
-                ApiProvider.OPENAI -> prefs[Keys.API_KEY_OPENAI] = key
-                ApiProvider.GOOGLE -> prefs[Keys.API_KEY_GOOGLE] = key
-                ApiProvider.OPENROUTER -> prefs[Keys.API_KEY_OPENROUTER] = key
-            }
-        }
-    }
-
-    // --- Base URLs ---
-
-    val anthropicBaseUrl: Flow<String> =
-        context.dataStore.data.map { it[Keys.BASE_URL_ANTHROPIC] ?: "" }
-
-    val openaiBaseUrl: Flow<String> =
-        context.dataStore.data.map { it[Keys.BASE_URL_OPENAI] ?: "" }
-
-    val openrouterBaseUrl: Flow<String> =
-        context.dataStore.data.map { it[Keys.BASE_URL_OPENROUTER] ?: "" }
-
-    suspend fun setBaseUrl(provider: ApiProvider, url: String) {
-        context.dataStore.edit { prefs ->
-            when (provider) {
-                ApiProvider.ANTHROPIC -> prefs[Keys.BASE_URL_ANTHROPIC] = url
-                ApiProvider.OPENAI -> prefs[Keys.BASE_URL_OPENAI] = url
-                ApiProvider.OPENROUTER -> prefs[Keys.BASE_URL_OPENROUTER] = url
-                ApiProvider.GOOGLE -> { /* Google doesn't support custom base URL */ }
-            }
-        }
-    }
-
-    // --- API Types (for custom base URL endpoints) ---
-
-    val anthropicApiType: Flow<String> =
-        context.dataStore.data.map { it[Keys.API_TYPE_ANTHROPIC] ?: ApiType.ANTHROPIC_MESSAGES }
-
-    val openaiApiType: Flow<String> =
-        context.dataStore.data.map { it[Keys.API_TYPE_OPENAI] ?: ApiType.OPENAI_COMPLETIONS }
-
-    val openrouterApiType: Flow<String> =
-        context.dataStore.data.map { it[Keys.API_TYPE_OPENROUTER] ?: ApiType.OPENAI_COMPLETIONS }
-
-    suspend fun setApiType(provider: ApiProvider, type: String) {
-        context.dataStore.edit { prefs ->
-            when (provider) {
-                ApiProvider.ANTHROPIC -> prefs[Keys.API_TYPE_ANTHROPIC] = type
-                ApiProvider.OPENAI -> prefs[Keys.API_TYPE_OPENAI] = type
-                ApiProvider.OPENROUTER -> prefs[Keys.API_TYPE_OPENROUTER] = type
-                ApiProvider.GOOGLE -> { /* not applicable */ }
-            }
+            prefs[provider.preferencesKey] = key
         }
     }
 
     // --- Model ---
 
     val selectedModel: Flow<String> =
-        context.dataStore.data.map { it[Keys.SELECTED_MODEL] ?: "claude-sonnet-4-20250514" }
+        context.dataStore.data.map { it[Keys.SELECTED_MODEL] ?: "" }
 
     suspend fun setSelectedModel(model: String) {
         context.dataStore.edit { it[Keys.SELECTED_MODEL] = model }
+    }
+
+    fun getSelectedModelSync(): String = runBlocking {
+        context.dataStore.data.first()[Keys.SELECTED_MODEL] ?: ""
     }
 
     // --- Setup ---
@@ -176,66 +111,106 @@ class PreferencesManager(private val context: Context) {
     }
 
     /**
-     * Returns a snapshot of all API keys and base URLs for config generation.
+     * Returns a snapshot of all API keys for config generation.
      * Blocking — call from IO dispatcher.
      */
     fun getProviderConfigsSync(): Map<ApiProvider, ProviderConfig> = runBlocking {
         val prefs = context.dataStore.data.first()
         ApiProvider.entries.associateWith { provider ->
-            ProviderConfig(
-                apiKey = when (provider) {
-                    ApiProvider.ANTHROPIC -> prefs[Keys.API_KEY_ANTHROPIC] ?: ""
-                    ApiProvider.OPENAI -> prefs[Keys.API_KEY_OPENAI] ?: ""
-                    ApiProvider.GOOGLE -> prefs[Keys.API_KEY_GOOGLE] ?: ""
-                    ApiProvider.OPENROUTER -> prefs[Keys.API_KEY_OPENROUTER] ?: ""
-                },
-                baseUrl = when (provider) {
-                    ApiProvider.ANTHROPIC -> prefs[Keys.BASE_URL_ANTHROPIC] ?: ""
-                    ApiProvider.OPENAI -> prefs[Keys.BASE_URL_OPENAI] ?: ""
-                    ApiProvider.OPENROUTER -> prefs[Keys.BASE_URL_OPENROUTER] ?: ""
-                    ApiProvider.GOOGLE -> ""
-                },
-                apiType = when (provider) {
-                    ApiProvider.ANTHROPIC -> prefs[Keys.API_TYPE_ANTHROPIC] ?: ApiType.ANTHROPIC_MESSAGES
-                    ApiProvider.OPENAI -> prefs[Keys.API_TYPE_OPENAI] ?: ApiType.OPENAI_COMPLETIONS
-                    ApiProvider.OPENROUTER -> prefs[Keys.API_TYPE_OPENROUTER] ?: ApiType.OPENAI_COMPLETIONS
-                    ApiProvider.GOOGLE -> ""
-                },
-            )
+            ProviderConfig(apiKey = prefs[provider.preferencesKey] ?: "")
         }
     }
 
-    enum class ApiProvider {
-        ANTHROPIC, OPENAI, GOOGLE, OPENROUTER;
-
-        val envVarName: String
-            get() = when (this) {
-                ANTHROPIC -> "ANTHROPIC_API_KEY"
-                OPENAI -> "OPENAI_API_KEY"
-                GOOGLE -> "GOOGLE_API_KEY"
-                OPENROUTER -> "OPENROUTER_API_KEY"
-            }
-
-        val displayName: String
-            get() = when (this) {
-                ANTHROPIC -> "Anthropic"
-                OPENAI -> "OpenAI"
-                GOOGLE -> "Google"
-                OPENROUTER -> "OpenRouter"
-            }
-    }
-
-    data class ProviderConfig(
-        val apiKey: String,
-        val baseUrl: String,
-        val apiType: String,
+    enum class ApiProvider(
+        val envVarName: String,
+        val displayName: String,
+        val keyHint: String,
+        val defaultModel: String,
+        val availableModels: List<ModelOption>,
     ) {
-        val hasCustomBaseUrl: Boolean get() = baseUrl.isNotBlank()
-        val hasApiKey: Boolean get() = apiKey.isNotBlank()
+        ANTHROPIC(
+            envVarName = "ANTHROPIC_API_KEY",
+            displayName = "Anthropic",
+            keyHint = "sk-ant-...",
+            defaultModel = "anthropic/claude-sonnet-4-20250514",
+            availableModels = listOf(
+                ModelOption("anthropic/claude-sonnet-4-20250514", "Claude Sonnet 4"),
+                ModelOption("anthropic/claude-haiku-4-5-20251001", "Claude Haiku 4.5"),
+                ModelOption("anthropic/claude-opus-4-20250514", "Claude Opus 4"),
+            ),
+        ),
+        OPENAI(
+            envVarName = "OPENAI_API_KEY",
+            displayName = "OpenAI",
+            keyHint = "sk-...",
+            defaultModel = "openai/o4-mini",
+            availableModels = listOf(
+                ModelOption("openai/o4-mini", "o4-mini"),
+                ModelOption("openai/gpt-4.1", "GPT-4.1"),
+                ModelOption("openai/gpt-4.1-mini", "GPT-4.1 Mini"),
+            ),
+        ),
+        GOOGLE(
+            envVarName = "GEMINI_API_KEY",
+            displayName = "Google",
+            keyHint = "AIza...",
+            defaultModel = "google/gemini-2.5-flash",
+            availableModels = listOf(
+                ModelOption("google/gemini-2.5-flash", "Gemini 2.5 Flash"),
+                ModelOption("google/gemini-2.5-pro", "Gemini 2.5 Pro"),
+            ),
+        ),
+        OPENROUTER(
+            envVarName = "OPENROUTER_API_KEY",
+            displayName = "OpenRouter",
+            keyHint = "sk-or-...",
+            defaultModel = "anthropic/claude-sonnet-4-20250514",
+            availableModels = listOf(
+                ModelOption("anthropic/claude-sonnet-4-20250514", "Claude Sonnet 4"),
+                ModelOption("openai/o4-mini", "o4-mini"),
+                ModelOption("google/gemini-2.5-flash", "Gemini 2.5 Flash"),
+            ),
+        ),
+        MINIMAX_CN(
+            envVarName = "MINIMAX_CN_API_KEY",
+            displayName = "MiniMax (中国)",
+            keyHint = "eyJ...",
+            defaultModel = "minimax-cn/MiniMax-M2.5",
+            availableModels = listOf(
+                ModelOption("minimax-cn/MiniMax-M2.5", "MiniMax-M2.5"),
+                ModelOption("minimax-cn/MiniMax-M2.1", "MiniMax-M2.1"),
+                ModelOption("minimax-cn/MiniMax-M2", "MiniMax-M2"),
+            ),
+        ),
+        ZAI(
+            envVarName = "ZAI_API_KEY",
+            displayName = "智谱 GLM",
+            keyHint = "",
+            defaultModel = "zai/glm-4.5",
+            availableModels = listOf(
+                ModelOption("zai/glm-4.5", "GLM-4.5"),
+                ModelOption("zai/glm-4.5-air", "GLM-4.5 Air"),
+                ModelOption("zai/glm-4.5-flash", "GLM-4.5 Flash"),
+            ),
+        ),
+        KIMI_CODING(
+            envVarName = "KIMI_API_KEY",
+            displayName = "Kimi",
+            keyHint = "",
+            defaultModel = "kimi-coding/k2p5",
+            availableModels = listOf(
+                ModelOption("kimi-coding/k2p5", "Kimi K2.5"),
+                ModelOption("kimi-coding/kimi-k2-thinking", "Kimi K2 Thinking"),
+            ),
+        );
+
+        val preferencesKey: Preferences.Key<String>
+            get() = stringPreferencesKey("api_key_${name.lowercase()}")
     }
 
-    object ApiType {
-        const val ANTHROPIC_MESSAGES = "anthropic-messages"
-        const val OPENAI_COMPLETIONS = "openai-completions"
+    data class ModelOption(val id: String, val displayName: String)
+
+    data class ProviderConfig(val apiKey: String) {
+        val hasApiKey: Boolean get() = apiKey.isNotBlank()
     }
 }

@@ -37,8 +37,8 @@ class ChatViewModel @Inject constructor(
     private val _pendingApproval = MutableStateFlow<ApprovalApi.ApprovalUiRequest?>(null)
     val pendingApproval: StateFlow<ApprovalApi.ApprovalUiRequest?> = _pendingApproval.asStateFlow()
 
-    // Tracks streaming state per message ID
-    private val streamingMessages = mutableMapOf<String, StringBuilder>()
+    // Maps runId -> message ID in our list for tracking streaming responses
+    private val runToMessageId = mutableMapOf<String, String>()
 
     init {
         observeChatEvents()
@@ -59,7 +59,8 @@ class ChatViewModel @Inject constructor(
 
         viewModelScope.launch {
             try {
-                chatApi.sendMessage(text.trim())
+                val runId = chatApi.sendMessage(text.trim())
+                runToMessageId[runId] = runId
                 updateMessage(userMessage.id) { it.copy(status = ChatMessage.Status.SENT) }
             } catch (e: Exception) {
                 updateMessage(userMessage.id) { it.copy(status = ChatMessage.Status.ERROR) }
@@ -86,9 +87,7 @@ class ChatViewModel @Inject constructor(
             try {
                 approvalApi.resolve(requestId, approved)
                 _pendingApproval.value = null
-            } catch (_: Exception) {
-                // Show error in UI if needed
-            }
+            } catch (_: Exception) { }
         }
     }
 
@@ -96,47 +95,92 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             chatApi.observeChatEvents().collect { event ->
                 when (event) {
-                    is ChatApi.ChatEvent.Message -> {
-                        // Complete message received — add or replace
-                        val existing = _messages.value.indexOfFirst { it.id == event.message.id }
-                        if (existing >= 0) {
-                            updateMessage(event.message.id) { event.message }
-                        } else {
-                            _messages.value = _messages.value + event.message
-                        }
-                        streamingMessages.remove(event.message.id)
-                    }
-                    is ChatApi.ChatEvent.Chunk -> {
-                        handleStreamingChunk(event)
-                    }
+                    is ChatApi.ChatEvent.Delta -> handleDelta(event)
+                    is ChatApi.ChatEvent.Final -> handleFinal(event)
+                    is ChatApi.ChatEvent.Error -> handleError(event)
                     ChatApi.ChatEvent.Unknown -> {}
                 }
             }
         }
     }
 
-    private fun handleStreamingChunk(chunk: ChatApi.ChatEvent.Chunk) {
-        val buffer = streamingMessages.getOrPut(chunk.messageId) { StringBuilder() }
-        buffer.append(chunk.delta)
+    private fun handleDelta(event: ChatApi.ChatEvent.Delta) {
+        val runId = event.runId
+        val existingMsgId = runToMessageId[runId]
 
-        val existing = _messages.value.indexOfFirst { it.id == chunk.messageId }
-        if (existing >= 0) {
-            updateMessage(chunk.messageId) {
-                it.copy(content = buffer.toString(), isStreaming = !chunk.done)
+        if (existingMsgId != null) {
+            val idx = _messages.value.indexOfFirst { it.id == existingMsgId }
+            if (idx >= 0) {
+                updateMessage(existingMsgId) {
+                    it.copy(content = event.text, isStreaming = true)
+                }
             }
         } else {
+            val msgId = "assistant-$runId"
+            runToMessageId[runId] = msgId
             val streamingMsg = ChatMessage(
-                id = chunk.messageId,
+                id = msgId,
                 role = ChatMessage.Role.ASSISTANT,
-                content = buffer.toString(),
-                isStreaming = !chunk.done,
+                content = event.text,
+                isStreaming = true,
             )
             _messages.value = _messages.value + streamingMsg
         }
+    }
 
-        if (chunk.done) {
-            streamingMessages.remove(chunk.messageId)
+    private fun handleFinal(event: ChatApi.ChatEvent.Final) {
+        val runId = event.runId
+        val existingMsgId = runToMessageId.remove(runId)
+
+        if (existingMsgId != null) {
+            val idx = _messages.value.indexOfFirst { it.id == existingMsgId }
+            if (idx >= 0) {
+                updateMessage(existingMsgId) {
+                    it.copy(
+                        content = event.text ?: it.content,
+                        isStreaming = false,
+                    )
+                }
+                return
+            }
         }
+
+        if (!event.text.isNullOrBlank()) {
+            val finalMsg = ChatMessage(
+                id = "assistant-$runId",
+                role = ChatMessage.Role.ASSISTANT,
+                content = event.text,
+                isStreaming = false,
+            )
+            _messages.value = _messages.value + finalMsg
+        }
+    }
+
+    private fun handleError(event: ChatApi.ChatEvent.Error) {
+        val runId = event.runId
+        val existingMsgId = runToMessageId.remove(runId)
+
+        if (existingMsgId != null) {
+            val idx = _messages.value.indexOfFirst { it.id == existingMsgId }
+            if (idx >= 0) {
+                updateMessage(existingMsgId) {
+                    it.copy(
+                        content = it.content + "\n\n[Error: ${event.errorMessage}]",
+                        isStreaming = false,
+                        status = ChatMessage.Status.ERROR,
+                    )
+                }
+                return
+            }
+        }
+
+        val errorMsg = ChatMessage(
+            id = "error-$runId",
+            role = ChatMessage.Role.SYSTEM,
+            content = "Error: ${event.errorMessage}",
+            status = ChatMessage.Status.ERROR,
+        )
+        _messages.value = _messages.value + errorMsg
     }
 
     private fun observeApprovalRequests() {

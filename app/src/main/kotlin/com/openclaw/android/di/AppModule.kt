@@ -98,8 +98,9 @@ object AppModule {
     fun provideGatewayClient(
         okHttpClient: OkHttpClient,
         preferencesManager: PreferencesManager,
+        paths: OpenClawConstants.Paths,
     ): GatewayClient {
-        return GatewayClient(okHttpClient, preferencesManager)
+        return GatewayClient(okHttpClient, preferencesManager, paths)
     }
 
     @Provides

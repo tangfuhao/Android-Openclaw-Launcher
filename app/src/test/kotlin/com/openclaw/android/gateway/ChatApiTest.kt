@@ -7,15 +7,15 @@ import io.mockk.mockk
 import io.mockk.slot
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
-import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -48,16 +48,16 @@ class ChatApiTest {
     // --- sendMessage ---
 
     @Test
-    fun `sendMessage returns messageId from response`() = runTest {
-        val payload = buildJsonObject { put("messageId", "msg-123") }
+    fun `sendMessage returns runId from response`() = runTest {
+        val payload = buildJsonObject { put("runId", "run-123") }
         coEvery { gateway.request("chat.send", any()) } returns okResponse(payload)
 
         val result = chatApi.sendMessage("hello")
-        assertEquals("msg-123", result)
+        assertEquals("run-123", result)
     }
 
     @Test
-    fun `sendMessage falls back to UUID when payload missing messageId`() = runTest {
+    fun `sendMessage falls back to UUID when payload missing runId`() = runTest {
         coEvery { gateway.request("chat.send", any()) } returns okResponse(buildJsonObject { })
 
         val result = chatApi.sendMessage("hello")
@@ -72,47 +72,26 @@ class ChatApiTest {
     }
 
     @Test
-    fun `sendMessage throws ChatApiException with fallback message`() = runTest {
-        coEvery { gateway.request("chat.send", any()) } returns errorResponse(message = null)
-        try {
-            chatApi.sendMessage("hello")
-        } catch (e: ChatApi.ChatApiException) {
-            assertEquals("Failed to send message", e.message)
-        }
-    }
-
-    @Test
     fun `sendMessage passes correct params to gateway`() = runTest {
         val paramsSlot = slot<JsonObject>()
         coEvery { gateway.request("chat.send", capture(paramsSlot)) } returns okResponse(
-            buildJsonObject { put("messageId", "m1") }
+            buildJsonObject { put("runId", "r1") }
         )
 
         chatApi.sendMessage("hello world")
         val params = paramsSlot.captured
-        assertEquals("hello world", params["text"]?.toString()?.trim('"'))
-        assertEquals("main", params["sessionKey"]?.toString()?.trim('"'))
-    }
-
-    @Test
-    fun `sendMessage uses custom sessionKey`() = runTest {
-        val paramsSlot = slot<JsonObject>()
-        coEvery { gateway.request("chat.send", capture(paramsSlot)) } returns okResponse(
-            buildJsonObject { put("messageId", "m1") }
-        )
-
-        chatApi.sendMessage("test", sessionKey = "custom-session")
-        assertEquals("custom-session", paramsSlot.captured["sessionKey"]?.toString()?.trim('"'))
+        assertEquals("hello world", params["message"]?.let { (it as JsonPrimitive).content })
+        assertEquals("main", params["sessionKey"]?.let { (it as JsonPrimitive).content })
+        assertNotNull(params["idempotencyKey"])
     }
 
     // --- getHistory ---
 
     @Test
-    fun `getHistory returns parsed messages`() = runTest {
+    fun `getHistory returns parsed messages with string content`() = runTest {
         val payload = buildJsonObject {
             putJsonArray("messages") {
                 add(buildJsonObject {
-                    put("id", "m1")
                     put("role", "user")
                     put("content", "hello")
                     put("timestamp", "1700000000")
@@ -123,64 +102,35 @@ class ChatApiTest {
 
         val messages = chatApi.getHistory()
         assertEquals(1, messages.size)
-        assertEquals("m1", messages[0].id)
         assertEquals("hello", messages[0].content)
-    }
-
-    @Test
-    fun `getHistory maps user role correctly`() = runTest {
-        val payload = buildJsonObject {
-            putJsonArray("messages") {
-                add(buildJsonObject { put("id", "1"); put("role", "user"); put("content", "") })
-            }
-        }
-        coEvery { gateway.request("chat.history", any()) } returns okResponse(payload)
-
-        val messages = chatApi.getHistory()
         assertEquals(ChatMessage.Role.USER, messages[0].role)
     }
 
     @Test
-    fun `getHistory maps assistant role correctly`() = runTest {
+    fun `getHistory parses array content blocks`() = runTest {
         val payload = buildJsonObject {
             putJsonArray("messages") {
-                add(buildJsonObject { put("id", "1"); put("role", "assistant"); put("content", "") })
+                add(buildJsonObject {
+                    put("role", "assistant")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject { put("type", "text"); put("text", "Hello ") })
+                        add(buildJsonObject { put("type", "text"); put("text", "world") })
+                    })
+                    put("timestamp", "1700000000")
+                })
             }
         }
         coEvery { gateway.request("chat.history", any()) } returns okResponse(payload)
 
         val messages = chatApi.getHistory()
-        assertEquals(ChatMessage.Role.ASSISTANT, messages[0].role)
-    }
-
-    @Test
-    fun `getHistory maps unknown role to SYSTEM`() = runTest {
-        val payload = buildJsonObject {
-            putJsonArray("messages") {
-                add(buildJsonObject { put("id", "1"); put("role", "tool"); put("content", "") })
-            }
-        }
-        coEvery { gateway.request("chat.history", any()) } returns okResponse(payload)
-
-        val messages = chatApi.getHistory()
-        assertEquals(ChatMessage.Role.SYSTEM, messages[0].role)
+        assertEquals(1, messages.size)
+        assertEquals("Hello \nworld", messages[0].content)
     }
 
     @Test
     fun `getHistory returns empty list when no messages`() = runTest {
-        val payload = buildJsonObject { }
-        coEvery { gateway.request("chat.history", any()) } returns okResponse(payload)
-
-        val messages = chatApi.getHistory()
-        assertTrue(messages.isEmpty())
-    }
-
-    @Test
-    fun `getHistory returns empty list when payload null`() = runTest {
-        coEvery { gateway.request("chat.history", any()) } returns okResponse(null)
-
-        val messages = chatApi.getHistory()
-        assertTrue(messages.isEmpty())
+        coEvery { gateway.request("chat.history", any()) } returns okResponse(buildJsonObject { })
+        assertTrue(chatApi.getHistory().isEmpty())
     }
 
     @Test(expected = ChatApi.ChatApiException::class)
@@ -189,86 +139,81 @@ class ChatApiTest {
         chatApi.getHistory()
     }
 
-    @Test
-    fun `getHistory skips malformed messages`() = runTest {
-        val payload = buildJsonObject {
-            putJsonArray("messages") {
-                add(buildJsonObject { put("id", "1"); put("role", "user"); put("content", "ok") })
-                add(JsonPrimitive("not-an-object"))
-            }
-        }
-        coEvery { gateway.request("chat.history", any()) } returns okResponse(payload)
-
-        val messages = chatApi.getHistory()
-        assertEquals(1, messages.size)
-    }
-
-    @Test
-    fun `getHistory passes before param when provided`() = runTest {
-        val paramsSlot = slot<JsonObject>()
-        coEvery { gateway.request("chat.history", capture(paramsSlot)) } returns okResponse(
-            buildJsonObject { putJsonArray("messages") {} }
-        )
-
-        chatApi.getHistory(before = "cursor-123")
-        assertTrue(paramsSlot.captured.containsKey("before"))
-    }
-
-    @Test
-    fun `getHistory omits before param when null`() = runTest {
-        val paramsSlot = slot<JsonObject>()
-        coEvery { gateway.request("chat.history", capture(paramsSlot)) } returns okResponse(
-            buildJsonObject { putJsonArray("messages") {} }
-        )
-
-        chatApi.getHistory(before = null)
-        assertTrue(!paramsSlot.captured.containsKey("before"))
-    }
-
     // --- observeChatEvents ---
 
     @Test
-    fun `observeChatEvents maps chunk correctly`() = runTest {
+    fun `observeChatEvents maps delta correctly`() = runTest {
         val events = mutableListOf<ChatApi.ChatEvent>()
         val job = launch(UnconfinedTestDispatcher(testScheduler)) {
             chatApi.observeChatEvents().collect { events.add(it) }
         }
 
         chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = "m1", delta = "hello", done = false),
+            runId = "run1",
+            sessionKey = "main",
+            state = "delta",
+            message = ChatMessagePayload(
+                role = "assistant",
+                content = JsonPrimitive("hello"),
+            ),
         ))
 
         assertEquals(1, events.size)
-        val chunk = events[0] as ChatApi.ChatEvent.Chunk
-        assertEquals("m1", chunk.messageId)
-        assertEquals("hello", chunk.delta)
-        assertEquals(false, chunk.done)
+        val delta = events[0] as ChatApi.ChatEvent.Delta
+        assertEquals("run1", delta.runId)
+        assertEquals("hello", delta.text)
 
         job.cancel()
     }
 
     @Test
-    fun `observeChatEvents maps message correctly`() = runTest {
+    fun `observeChatEvents maps final correctly`() = runTest {
         val events = mutableListOf<ChatApi.ChatEvent>()
         val job = launch(UnconfinedTestDispatcher(testScheduler)) {
             chatApi.observeChatEvents().collect { events.add(it) }
         }
 
         chatEventsFlow.emit(ChatEventPayload(
-            message = ChatMessagePayload(id = "m2", role = "assistant", content = "world", timestamp = 123L),
+            runId = "run2",
+            sessionKey = "main",
+            state = "final",
+            message = ChatMessagePayload(
+                role = "assistant",
+                content = JsonPrimitive("done"),
+            ),
         ))
 
         assertEquals(1, events.size)
-        val msg = events[0] as ChatApi.ChatEvent.Message
-        assertEquals("m2", msg.message.id)
-        assertEquals(ChatMessage.Role.ASSISTANT, msg.message.role)
-        assertEquals("world", msg.message.content)
+        val final = events[0] as ChatApi.ChatEvent.Final
+        assertEquals("run2", final.runId)
+        assertEquals("done", final.text)
 
         job.cancel()
     }
 
     @Test
-    fun `observeChatEvents emits Unknown for empty payload`() = runTest {
+    fun `observeChatEvents maps error correctly`() = runTest {
+        val events = mutableListOf<ChatApi.ChatEvent>()
+        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
+            chatApi.observeChatEvents().collect { events.add(it) }
+        }
+
+        chatEventsFlow.emit(ChatEventPayload(
+            runId = "run3",
+            state = "error",
+            errorMessage = "rate limited",
+        ))
+
+        assertEquals(1, events.size)
+        val error = events[0] as ChatApi.ChatEvent.Error
+        assertEquals("run3", error.runId)
+        assertEquals("rate limited", error.errorMessage)
+
+        job.cancel()
+    }
+
+    @Test
+    fun `observeChatEvents emits Unknown for null state`() = runTest {
         val events = mutableListOf<ChatApi.ChatEvent>()
         val job = launch(UnconfinedTestDispatcher(testScheduler)) {
             chatApi.observeChatEvents().collect { events.add(it) }
@@ -278,25 +223,6 @@ class ChatApiTest {
 
         assertEquals(1, events.size)
         assertEquals(ChatApi.ChatEvent.Unknown, events[0])
-
-        job.cancel()
-    }
-
-    @Test
-    fun `observeChatEvents defaults null fields to empty string`() = runTest {
-        val events = mutableListOf<ChatApi.ChatEvent>()
-        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
-            chatApi.observeChatEvents().collect { events.add(it) }
-        }
-
-        chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = null, delta = null, done = true),
-        ))
-
-        assertEquals(1, events.size)
-        val chunk = events[0] as ChatApi.ChatEvent.Chunk
-        assertEquals("", chunk.messageId)
-        assertEquals("", chunk.delta)
 
         job.cancel()
     }

@@ -44,15 +44,9 @@ class SettingsViewModelTest {
 
         every { processManager.processState } returns MutableStateFlow(ProcessManager.ProcessState.Stopped)
         every { preferencesManager.isBackgroundEnabled } returns flowOf(true)
-        every { preferencesManager.anthropicApiKey } returns flowOf("")
-        every { preferencesManager.openaiApiKey } returns flowOf("")
-        every { preferencesManager.openrouterApiKey } returns flowOf("")
-        every { preferencesManager.anthropicBaseUrl } returns flowOf("")
-        every { preferencesManager.openaiBaseUrl } returns flowOf("")
-        every { preferencesManager.openrouterBaseUrl } returns flowOf("")
-        every { preferencesManager.anthropicApiType } returns flowOf(PreferencesManager.ApiType.ANTHROPIC_MESSAGES)
-        every { preferencesManager.openaiApiType } returns flowOf(PreferencesManager.ApiType.OPENAI_COMPLETIONS)
-        every { preferencesManager.openrouterApiType } returns flowOf(PreferencesManager.ApiType.OPENAI_COMPLETIONS)
+        every { preferencesManager.allApiKeys } returns flowOf(
+            ApiProvider.entries.associateWith { "" }
+        )
 
         viewModel = SettingsViewModel(preferencesManager, processManager, configWriter)
     }
@@ -64,7 +58,6 @@ class SettingsViewModelTest {
 
     @Test
     fun `initial processState is Unknown`() = runTest {
-        // The stateIn uses "Unknown" as the initial value before the first emission
         assertEquals("Unknown", viewModel.processState.value)
     }
 
@@ -77,9 +70,10 @@ class SettingsViewModelTest {
     @Test
     fun `initial API keys are empty`() = runTest {
         advanceUntilIdle()
-        assertEquals("", viewModel.anthropicKey.value)
-        assertEquals("", viewModel.openaiKey.value)
-        assertEquals("", viewModel.openrouterKey.value)
+        val keys = viewModel.apiKeys.value
+        ApiProvider.entries.forEach { provider ->
+            assertEquals("", keys[provider] ?: "")
+        }
     }
 
     @Test
@@ -99,36 +93,18 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `saveProviderConfig saves baseUrl`() = runTest {
-        viewModel.saveProviderConfig(ApiProvider.OPENAI, apiKey = "k", baseUrl = "https://proxy.com")
+    fun `saveProviderConfig saves CN provider apiKey`() = runTest {
+        viewModel.saveProviderConfig(ApiProvider.MINIMAX_CN, apiKey = "cn-key")
         advanceUntilIdle()
 
-        coVerify { preferencesManager.setBaseUrl(ApiProvider.OPENAI, "https://proxy.com") }
-    }
-
-    @Test
-    fun `saveProviderConfig saves apiType when not blank`() = runTest {
-        viewModel.saveProviderConfig(
-            ApiProvider.ANTHROPIC, apiKey = "k", apiType = "anthropic-messages",
-        )
-        advanceUntilIdle()
-
-        coVerify { preferencesManager.setApiType(ApiProvider.ANTHROPIC, "anthropic-messages") }
-    }
-
-    @Test
-    fun `saveProviderConfig skips apiType when blank`() = runTest {
-        viewModel.saveProviderConfig(ApiProvider.ANTHROPIC, apiKey = "k", apiType = "")
-        advanceUntilIdle()
-
-        coVerify(exactly = 0) { preferencesManager.setApiType(any(), any()) }
+        coVerify { preferencesManager.setApiKey(ApiProvider.MINIMAX_CN, "cn-key") }
     }
 
     @Test
     fun `saveProviderConfig calls configWriter writeConfig`() = runTest {
         viewModel.saveProviderConfig(ApiProvider.ANTHROPIC, apiKey = "k")
         advanceUntilIdle()
-        Thread.sleep(100) // Allow IO dispatch
+        Thread.sleep(100)
 
         verify(timeout = 1000) { configWriter.writeConfig() }
     }
@@ -140,7 +116,6 @@ class SettingsViewModelTest {
 
         val vm = SettingsViewModel(preferencesManager, processManager, configWriter)
 
-        // Subscribe to trigger stateIn collection
         val job = launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) {
             vm.processState.collect {}
         }

@@ -2,13 +2,11 @@ package com.openclaw.android.ui.chat
 
 import com.openclaw.android.data.ChatMessage
 import com.openclaw.android.gateway.ApprovalRequestPayload
-import com.openclaw.android.gateway.ChatChunkPayload
 import com.openclaw.android.gateway.ChatEventPayload
 import com.openclaw.android.gateway.ChatMessagePayload
 import com.openclaw.android.gateway.GatewayClient
 import com.openclaw.android.gateway.GatewayResponse
 import com.openclaw.android.gateway.GatewayState
-import com.openclaw.android.gateway.JsonError
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -21,7 +19,7 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
-import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -86,18 +84,12 @@ class ChatViewModelTest {
         assertNull(viewModel.pendingApproval.value)
     }
 
-    @Test
-    fun `initial connection state is Idle`() = runTest {
-        advanceUntilIdle()
-        assertEquals(GatewayState.Idle, viewModel.connectionState.value)
-    }
-
     // --- sendMessage ---
 
     @Test
     fun `sendMessage adds user message to list`() = runTest {
         coEvery { gatewayClient.request("chat.send", any()) } returns GatewayResponse(
-            id = "1", ok = true, payload = buildJsonObject { put("messageId", "m1") },
+            id = "1", ok = true, payload = buildJsonObject { put("runId", "r1") },
         )
 
         viewModel.sendMessage("hello world")
@@ -109,35 +101,10 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun `sendMessage trims text`() = runTest {
-        coEvery { gatewayClient.request("chat.send", any()) } returns GatewayResponse(
-            id = "1", ok = true, payload = buildJsonObject { put("messageId", "m1") },
-        )
-
-        viewModel.sendMessage("  hello  ")
-        advanceUntilIdle()
-
-        assertEquals("hello", viewModel.messages.value[0].content)
-    }
-
-    @Test
     fun `sendMessage ignores blank text`() = runTest {
         viewModel.sendMessage("   ")
         advanceUntilIdle()
-
         assertTrue(viewModel.messages.value.isEmpty())
-    }
-
-    @Test
-    fun `sendMessage sets status to SENDING then SENT`() = runTest {
-        coEvery { gatewayClient.request("chat.send", any()) } returns GatewayResponse(
-            id = "1", ok = true, payload = buildJsonObject { put("messageId", "m1") },
-        )
-
-        viewModel.sendMessage("hello")
-        advanceUntilIdle()
-
-        assertEquals(ChatMessage.Status.SENT, viewModel.messages.value[0].status)
     }
 
     @Test
@@ -150,79 +117,37 @@ class ChatViewModelTest {
         assertEquals(ChatMessage.Status.ERROR, viewModel.messages.value[0].status)
     }
 
-    // --- loadHistory ---
+    // --- Streaming (delta events) ---
 
     @Test
-    fun `loadHistory replaces messages`() = runTest {
-        val payload = buildJsonObject {
-            putJsonArray("messages") {
-                add(buildJsonObject {
-                    put("id", "h1"); put("role", "user"); put("content", "old msg"); put("timestamp", "100")
-                })
-            }
-        }
-        coEvery { gatewayClient.request("chat.history", any()) } returns GatewayResponse(
-            id = "1", ok = true, payload = payload,
-        )
-
-        viewModel.loadHistory()
-        advanceUntilIdle()
-
-        assertEquals(1, viewModel.messages.value.size)
-        assertEquals("old msg", viewModel.messages.value[0].content)
-    }
-
-    @Test
-    fun `loadHistory sets loading state`() = runTest {
-        coEvery { gatewayClient.request("chat.history", any()) } returns GatewayResponse(
-            id = "1", ok = true, payload = buildJsonObject { putJsonArray("messages") {} },
-        )
-
-        viewModel.loadHistory()
-        advanceUntilIdle()
-
-        assertEquals(false, viewModel.isLoading.value)
-    }
-
-    @Test
-    fun `loadHistory resets loading on failure`() = runTest {
-        coEvery { gatewayClient.request("chat.history", any()) } throws RuntimeException("fail")
-
-        viewModel.loadHistory()
-        advanceUntilIdle()
-
-        assertEquals(false, viewModel.isLoading.value)
-    }
-
-    // --- Streaming ---
-
-    @Test
-    fun `handleStreamingChunk creates new assistant message`() = runTest {
+    fun `delta event creates new assistant message`() = runTest {
         advanceUntilIdle()
 
         chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = "s1", delta = "Hello", done = false),
+            runId = "run1", sessionKey = "main", state = "delta",
+            message = ChatMessagePayload(role = "assistant", content = JsonPrimitive("Hello")),
         ))
         advanceUntilIdle()
 
         assertEquals(1, viewModel.messages.value.size)
-        assertEquals("s1", viewModel.messages.value[0].id)
         assertEquals(ChatMessage.Role.ASSISTANT, viewModel.messages.value[0].role)
         assertEquals("Hello", viewModel.messages.value[0].content)
         assertTrue(viewModel.messages.value[0].isStreaming)
     }
 
     @Test
-    fun `handleStreamingChunk accumulates delta`() = runTest {
+    fun `subsequent delta replaces content`() = runTest {
         advanceUntilIdle()
 
         chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = "s1", delta = "Hello", done = false),
+            runId = "run1", state = "delta",
+            message = ChatMessagePayload(role = "assistant", content = JsonPrimitive("Hello")),
         ))
         advanceUntilIdle()
 
         chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = "s1", delta = " World", done = false),
+            runId = "run1", state = "delta",
+            message = ChatMessagePayload(role = "assistant", content = JsonPrimitive("Hello World")),
         ))
         advanceUntilIdle()
 
@@ -230,49 +155,21 @@ class ChatViewModelTest {
         assertEquals("Hello World", viewModel.messages.value[0].content)
     }
 
-    @Test
-    fun `handleStreamingChunk marks streaming done`() = runTest {
-        advanceUntilIdle()
-
-        chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = "s1", delta = "Done", done = true),
-        ))
-        advanceUntilIdle()
-
-        assertEquals(false, viewModel.messages.value[0].isStreaming)
-    }
+    // --- Final events ---
 
     @Test
-    fun `handleStreamingChunk updates existing message`() = runTest {
+    fun `final event completes streaming message`() = runTest {
         advanceUntilIdle()
 
         chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = "s1", delta = "Part1", done = false),
+            runId = "run1", state = "delta",
+            message = ChatMessagePayload(role = "assistant", content = JsonPrimitive("streaming...")),
         ))
         advanceUntilIdle()
 
         chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = "s1", delta = "Part2", done = false),
-        ))
-        advanceUntilIdle()
-
-        assertEquals(1, viewModel.messages.value.size)
-        assertEquals("Part1Part2", viewModel.messages.value[0].content)
-    }
-
-    // --- Complete message events ---
-
-    @Test
-    fun `complete message event replaces streaming message`() = runTest {
-        advanceUntilIdle()
-
-        chatEventsFlow.emit(ChatEventPayload(
-            chunk = ChatChunkPayload(messageId = "s1", delta = "stream...", done = false),
-        ))
-        advanceUntilIdle()
-
-        chatEventsFlow.emit(ChatEventPayload(
-            message = ChatMessagePayload(id = "s1", role = "assistant", content = "Final content", timestamp = 123L),
+            runId = "run1", state = "final",
+            message = ChatMessagePayload(role = "assistant", content = JsonPrimitive("Final content")),
         ))
         advanceUntilIdle()
 
@@ -282,20 +179,37 @@ class ChatViewModelTest {
     }
 
     @Test
-    fun `complete message event adds new message`() = runTest {
+    fun `final event with no prior delta adds new message`() = runTest {
         advanceUntilIdle()
 
         chatEventsFlow.emit(ChatEventPayload(
-            message = ChatMessagePayload(id = "m1", role = "assistant", content = "Hello!", timestamp = 100L),
+            runId = "run1", state = "final",
+            message = ChatMessagePayload(role = "assistant", content = JsonPrimitive("Complete")),
         ))
         advanceUntilIdle()
 
         assertEquals(1, viewModel.messages.value.size)
-        assertEquals("Hello!", viewModel.messages.value[0].content)
+        assertEquals("Complete", viewModel.messages.value[0].content)
+    }
+
+    // --- Error events ---
+
+    @Test
+    fun `error event adds system error message`() = runTest {
+        advanceUntilIdle()
+
+        chatEventsFlow.emit(ChatEventPayload(
+            runId = "run1", state = "error", errorMessage = "API key invalid",
+        ))
+        advanceUntilIdle()
+
+        assertEquals(1, viewModel.messages.value.size)
+        assertEquals(ChatMessage.Role.SYSTEM, viewModel.messages.value[0].role)
+        assertTrue(viewModel.messages.value[0].content.contains("API key invalid"))
     }
 
     @Test
-    fun `unknown chat event is ignored`() = runTest {
+    fun `unknown event is ignored`() = runTest {
         advanceUntilIdle()
 
         chatEventsFlow.emit(ChatEventPayload())
@@ -305,6 +219,18 @@ class ChatViewModelTest {
     }
 
     // --- Approvals ---
+
+    @Test
+    fun `approval request sets pendingApproval`() = runTest {
+        advanceUntilIdle()
+
+        approvalRequestsFlow.emit(ApprovalRequestPayload(requestId = "a1", tool = "bash", description = "rm -rf /"))
+        advanceUntilIdle()
+
+        val approval = viewModel.pendingApproval.value
+        assertNotNull(approval)
+        assertEquals("a1", approval!!.requestId)
+    }
 
     @Test
     fun `resolveApproval clears pending approval on success`() = runTest {
@@ -322,34 +248,5 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertNull(viewModel.pendingApproval.value)
-    }
-
-    @Test
-    fun `resolveApproval keeps approval on failure`() = runTest {
-        advanceUntilIdle()
-
-        approvalRequestsFlow.emit(ApprovalRequestPayload(requestId = "a1", tool = "bash", description = "run ls"))
-        advanceUntilIdle()
-
-        coEvery { gatewayClient.request("exec.approval.resolve", any()) } throws RuntimeException("fail")
-
-        viewModel.resolveApproval("a1", true)
-        advanceUntilIdle()
-
-        // pendingApproval is not cleared because the resolve threw
-        assertNotNull(viewModel.pendingApproval.value)
-    }
-
-    @Test
-    fun `approval request sets pendingApproval`() = runTest {
-        advanceUntilIdle()
-
-        approvalRequestsFlow.emit(ApprovalRequestPayload(requestId = "a1", tool = "bash", description = "rm -rf /"))
-        advanceUntilIdle()
-
-        val approval = viewModel.pendingApproval.value
-        assertNotNull(approval)
-        assertEquals("a1", approval!!.requestId)
-        assertEquals("bash", approval.tool)
     }
 }

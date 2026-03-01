@@ -21,15 +21,15 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
@@ -42,6 +42,7 @@ import java.util.concurrent.ConcurrentHashMap
 class GatewayClient(
     private val httpClient: OkHttpClient,
     private val preferencesManager: PreferencesManager,
+    private val paths: OpenClawConstants.Paths,
 ) {
 
     companion object {
@@ -55,6 +56,7 @@ class GatewayClient(
         ignoreUnknownKeys = true
         isLenient = true
         encodeDefaults = true
+        explicitNulls = false
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -127,14 +129,6 @@ class GatewayClient(
         }
     }
 
-    /** Fire-and-forget: sends a request without waiting for a response. */
-    fun send(method: String, params: JsonObject = JsonObject(emptyMap())) {
-        val id = UUID.randomUUID().toString()
-        val req = GatewayRequest(id = id, method = method, params = params)
-        val text = json.encodeToString(GatewayRequest.serializer(), req)
-        webSocket?.send(text)
-    }
-
     private fun handleFrame(text: String) {
         try {
             val frame = json.decodeFromString(GatewayFrame.serializer(), text)
@@ -194,18 +188,32 @@ class GatewayClient(
         }
     }
 
+    /**
+     * Reads the auth token from the gateway's internal config file.
+     * The gateway generates and writes this token on first startup.
+     */
+    private fun readGatewayAuthToken(): String? {
+        val configFile = File(paths.hostOpenclawConfig, "openclaw.json")
+        if (!configFile.exists()) return null
+        return try {
+            val parsed = json.parseToJsonElement(configFile.readText()).jsonObject
+            parsed["gateway"]?.jsonObject?.get("auth")?.jsonObject?.get("token")?.jsonPrimitive?.content
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to read gateway auth token", e)
+            null
+        }
+    }
+
     private suspend fun performHandshake(challengePayload: JsonObject) {
         val challenge = json.decodeFromJsonElement(ConnectChallenge.serializer(), challengePayload)
 
-        val deviceId = preferencesManager.getOrCreateDeviceId()
+        val authToken = readGatewayAuthToken()
+        Log.d(TAG, "Auth token available: ${authToken != null}")
 
         val connectParams = ConnectParams(
             client = ClientInfo(),
-            device = DeviceInfo(
-                id = deviceId,
-                nonce = challenge.nonce,
-                signedAt = challenge.ts,
-            ),
+            device = null,
+            auth = if (authToken != null) AuthInfo(token = authToken) else AuthInfo(),
         )
 
         val paramsJson = json.encodeToJsonElement(ConnectParams.serializer(), connectParams).jsonObject
@@ -219,9 +227,6 @@ class GatewayClient(
             _connectionState.value = GatewayState.Connected(protocol)
             reconnectAttempt = 0
             Log.i(TAG, "Connected to gateway (protocol v$protocol)")
-
-            // Subscribe to chat events
-            send("chat.subscribe", buildJsonObject { put("sessionKey", "main") })
         } else {
             val errorMsg = response.error?.message ?: "Unknown handshake error"
             _connectionState.value = GatewayState.Error(errorMsg)

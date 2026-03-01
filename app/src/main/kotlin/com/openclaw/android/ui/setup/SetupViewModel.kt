@@ -63,16 +63,12 @@ class SetupViewModel @Inject constructor(
     fun saveProviderConfig(
         provider: ApiProvider,
         apiKey: String,
-        baseUrl: String = "",
-        apiType: String = "",
+        model: String = "",
     ) {
         viewModelScope.launch {
             preferencesManager.setApiKey(provider, apiKey)
-            if (baseUrl.isNotBlank()) {
-                preferencesManager.setBaseUrl(provider, baseUrl)
-            }
-            if (apiType.isNotBlank()) {
-                preferencesManager.setApiType(provider, apiType)
+            if (model.isNotBlank()) {
+                preferencesManager.setSelectedModel(model)
             }
             withContext(Dispatchers.IO) {
                 configWriter.writeConfig()
