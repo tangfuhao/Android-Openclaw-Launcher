@@ -44,10 +44,11 @@ android_openclaw/
             │   └── PreferencesManager.kt # DataStore 偏好存储
             │
             ├── proot/
-            │   ├── RootfsState.kt       # 安装状态（密封接口）
-            │   ├── FileDownloader.kt    # HTTP 下载器
-            │   ├── RootfsInstaller.kt   # Rootfs 安装协调器
-            │   └── ProotExecutor.kt     # proot 命令构建与进程启动
+            │   ├── RootfsState.kt           # 安装状态（密封接口）
+            │   ├── FileDownloader.kt        # HTTP 下载器
+            │   ├── RootfsInstaller.kt       # Rootfs 安装协调器
+            │   ├── ProotExecutor.kt         # proot 命令构建与进程启动
+            │   └── OpenClawConfigWriter.kt  # 写 openclaw.json 和 auth-profiles.json
             │
             ├── gateway/
             │   ├── GatewayState.kt      # 连接状态（密封接口）

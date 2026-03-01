@@ -182,13 +182,19 @@ PreferencesManager (DataStore Preferences)
        │    └── SettingsScreen → 后台模式开关
        │    └── BootReceiver → 开机自启判断
        │
-       ├──► anthropicApiKey (Flow<String>)
-       │    └── SettingsScreen → API key 输入框
+       ├──► allApiKeys (Flow<Map<ApiProvider, String>>)
+       │    └── SettingsViewModel.apiKeys → SettingsScreen 各 Provider 输入框
+       │    └── 设置后触发 OpenClawConfigWriter.writeConfig()
+       │
+       ├──► selectedModel (Flow<String>)
+       │    └── SettingsViewModel.selectedModel → SettingsScreen 模型选择下拉框
        │
        └──► isRootfsInstalled (Flow<Boolean>)
             └── TerminalScreen → 显示终端或 "未安装" 提示
             └── BootReceiver → 开机自启判断
 ```
+
+**API Key 存储结构：** 7 个 Provider（Anthropic、OpenAI、Google、OpenRouter、MiniMax、智谱 GLM、Kimi）的 API key 分别以 `api_key_<provider_name_lowercase>` 为 key 存入 DataStore。`allApiKeys` Flow 一次性返回所有 Provider 的 key map，由 `SettingsViewModel.apiKeys` StateFlow 向 UI 暴露。
 
 ## StateFlow vs SharedFlow
 

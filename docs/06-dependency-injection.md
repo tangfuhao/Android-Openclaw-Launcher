@@ -51,31 +51,30 @@ class BootReceiver : BroadcastReceiver() {
 ```
 AppModule (@Module @InstallIn(SingletonComponent))
 │
-├── providePaths(@ApplicationContext) ──► Paths               [Singleton]
-├── provideOkHttpClient()            ──► OkHttpClient         [Singleton]
-├── providePreferencesManager()      ──► PreferencesManager   [Singleton]
-├── provideFileDownloader(Http)      ──► FileDownloader       [Singleton]
-├── provideProotExecutor(Ctx,Paths)  ──► ProotExecutor        [Singleton]
-├── provideRootfsInstaller(...)      ──► RootfsInstaller      [Singleton]
-├── provideProcessManager(...)       ──► ProcessManager       [Singleton]
-├── provideGatewayClient(Http)       ──► GatewayClient        [Singleton]
-└── provideHealthMonitor(Gateway)    ──► HealthMonitor        [Singleton]
+├── providePaths(@ApplicationContext)              ──► Paths                  [Singleton]
+├── provideOkHttpClient()                          ──► OkHttpClient           [Singleton]
+├── providePreferencesManager(@ApplicationContext) ──► PreferencesManager     [Singleton]
+├── provideFileDownloader(OkHttpClient)            ──► FileDownloader         [Singleton]
+├── provideOpenClawConfigWriter(Paths, Prefs)      ──► OpenClawConfigWriter   [Singleton]
+├── provideProotExecutor(Ctx, Paths, ConfigWriter) ──► ProotExecutor          [Singleton]
+├── provideRootfsInstaller(Ctx, Paths, ...)        ──► RootfsInstaller        [Singleton]
+├── provideProcessManager(Ctx, Paths, Proot, CW)   ──► ProcessManager         [Singleton]
+├── provideGatewayClient(Http, Prefs, Paths)       ──► GatewayClient          [Singleton]
+└── provideHealthMonitor(GatewayClient)            ──► HealthMonitor          [Singleton]
 ```
 
 ### 依赖关系图
 
 ```
-@ApplicationContext ──┬──► Paths
-                     │      │
-                     │      ├──► ProotExecutor ──► ProcessManager
-                     │      │                         ▲
-                     │      ├──► RootfsInstaller ──────┘
-                     │      │       ▲
-                     │      │       │
-                     ├──────┘       │
-                     │              │
-                     └──► PreferencesManager ──► RootfsInstaller
-                     
+@ApplicationContext ──┬──► Paths ──┬──► OpenClawConfigWriter ──┬──► ProotExecutor ──► ProcessManager
+                     │            │                            │
+                     │            ├──► RootfsInstaller         └──► ProcessManager
+                     │            │
+                     │            └──► GatewayClient (读取 openclaw.json token)
+                     │
+                     └──► PreferencesManager ──┬──► OpenClawConfigWriter
+                                               └──► RootfsInstaller
+
 OkHttpClient ──┬──► FileDownloader ──► RootfsInstaller
                │
                └──► GatewayClient ──► HealthMonitor
@@ -109,8 +108,8 @@ fun ChatScreen(viewModel: ChatViewModel = hiltViewModel()) {
 | `MainViewModel` | `PreferencesManager` |
 | `ChatViewModel` | `GatewayClient` |
 | `TerminalViewModel` | `@ApplicationContext`, `ProotExecutor`, `RootfsInstaller`, `Paths` |
-| `SetupViewModel` | `@ApplicationContext`, `RootfsInstaller`, `PreferencesManager` |
-| `SettingsViewModel` | `PreferencesManager`, `ProcessManager` |
+| `SetupViewModel` | `@ApplicationContext`, `RootfsInstaller`, `PreferencesManager`, `OpenClawConfigWriter` |
+| `SettingsViewModel` | `PreferencesManager`, `ProcessManager`, `OpenClawConfigWriter` |
 
 ## 作用域说明
 

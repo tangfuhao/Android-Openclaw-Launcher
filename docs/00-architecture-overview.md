@@ -75,9 +75,9 @@ Android 10+ (API 29) 引入了 W^X (Write XOR Execute) 限制，禁止从 `/data
 
 ### 4. Termux 库嵌入（非独立 Termux 应用）
 
-不需要用户安装 Termux。`terminal-emulator`（PTY 管理）和 `terminal-view`（终端渲染 View）通过 JitPack 以 AAR/JAR 依赖编译进 APK。终端会话在 proot 包装的 Debian bash 中创建。
+不需要用户安装 Termux。`terminal-emulator`（PTY 管理）和 `terminal-view`（终端渲染 View）通过 JitPack 以 AAR/JAR 依赖编译进 APK。终端会话以 proot 二进制为 Shell 入口，在 proot 包装的 Debian bash 中创建。
 
-### 4. Foreground Service + WakeLock
+### 5. Foreground Service + WakeLock
 
 为保证 Gateway 7x24 运行，使用 Foreground Service 持有通知 + Partial WakeLock 防止 CPU 休眠。配合 `BootReceiver` 实现开机自启。
 

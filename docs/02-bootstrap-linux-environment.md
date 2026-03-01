@@ -42,7 +42,7 @@ proot 拦截 syscall 并重映射为:  /data/data/com.openclaw.android/files/roo
 │   │   └── lib/
 │   │       └── node_modules/
 │   │           └── openclaw/              ← OpenClaw Gateway
-│   │               └── bin/openclaw.js    ← Paths.hostOpenclawEntry
+│   │               └── openclaw.mjs        ← Paths.hostOpenclawEntry
 │   ├── etc/
 │   │   └── resolv.conf                    ← DNS 配置 (8.8.8.8)
 │   ├── root/                              ← $HOME (/root)
@@ -62,7 +62,7 @@ proot 拦截 syscall 并重映射为:  /data/data/com.openclaw.android/files/roo
 |------|--------------------------|--------------------------|
 | Node.js | `filesDir/rootfs/usr/bin/node` | `/usr/bin/node` |
 | Bash | `filesDir/rootfs/usr/bin/bash` | `/usr/bin/bash` |
-| OpenClaw | `filesDir/rootfs/usr/lib/node_modules/openclaw/bin/openclaw.js` | `/usr/lib/node_modules/openclaw/bin/openclaw.js` |
+| OpenClaw | `filesDir/rootfs/usr/lib/node_modules/openclaw/openclaw.mjs` | `/usr/lib/node_modules/openclaw/openclaw.mjs` |
 | Home | `filesDir/rootfs/root` | `/root` |
 
 Host 路径用于文件存在性检查（`File.exists()`），Inner 路径用于传给 proot 内部进程。
@@ -97,15 +97,19 @@ Host 路径用于文件存在性检查（`File.exists()`），Inner 路径用于
 │                                                              │
 │  3. 解压阶段 → state = Extracting                            │
 │     └── extractRootfs(archive, rootfsDir)                    │
-│         └── /system/bin/tar xf archive -C rootfsDir          │
+│         └── Apache Commons Compress (TarArchiveInputStream   │
+│             + XZCompressorInputStream)                        │
+│             ├── 目录 → mkdirs()                               │
+│             ├── 符号链接 → Os.symlink()                       │
+│             ├── 硬链接 → 转为相对符号链接                      │
+│             └── 普通文件 → 写入 + applyPermissions()          │
 │                                                              │
 │  4. 配置阶段 → state = Configuring                           │
-│     ├── 写入 /etc/resolv.conf (DNS: 8.8.8.8, 8.8.4.4)      │
-│     ├── 设置 bin/ usr/bin/ 等目录下文件的可执行权限            │
+│     ├── 写入 /etc/resolv.conf (DNS: 8.8.8.8, 8.8.4.4, 1.1.1.1) │
 │     └── 创建 proot-tmp 目录                                   │
 │                                                              │
 │  5. 验证阶段 → state = Verifying                             │
-│     └── 检查 node, bash, openclaw.js 三个关键文件是否存在      │
+│     └── 检查 node, bash, openclaw.mjs 三个关键文件是否存在      │
 │                                                              │
 │  6. 清理 + 持久化                                            │
 │     ├── 删除缓存的压缩包                                      │
@@ -155,30 +159,53 @@ NotInstalled ──► Checking ──► Downloading(progress) ──► Extrac
 ### 命令构建
 
 ```
-proot \
+libproot.so \
   --rootfs=/data/.../files/rootfs \
-  --bind=/dev \
-  --bind=/proc \
-  --bind=/sys \
+  --bind=/dev:/dev \
+  --bind=/proc:/proc \
+  --bind=/sys:/sys \
+  --bind=/storage:/storage \
+  --cwd=/root \
   --link2symlink \
   -0 \
-  --cwd=/root \
-  /usr/bin/node /usr/lib/node_modules/openclaw/bin/openclaw.js gateway --port 18789
+  <innerCommand>
 ```
+
+Gateway 启动的完整内部命令（`innerCommand`）：
+
+```
+/usr/bin/node /usr/lib/node_modules/openclaw/openclaw.mjs gateway \
+  --port 18789 --bind loopback --allow-unconfigured
+```
+
+注意事项：
+- proot 二进制命名为 `libproot.so` 是为了让 Android 自动解压到 `nativeLibraryDir`
+- `--bind=/dev:/dev` 格式表示"将 Android 的 /dev 挂载到 proot 内的 /dev"
+- `--link2symlink` 解决 FAT/ext4 不支持硬链接时的兼容问题
+- `-0` 使进程在 proot 内以 root 身份（uid/gid 0）运行
 
 ### 环境变量
 
-`ProotExecutor.buildEnvironment()` 为 proot 宿主进程设置：
+`ProotExecutor.buildEnvironment()` 为 proot 宿主进程设置完整的环境：
 
 ```
 HOME=/root
-TERM=xterm-256color
 LANG=en_US.UTF-8
+TERM=xterm-256color
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+TMPDIR=/data/.../files/proot-tmp
 PROOT_TMP_DIR=/data/.../files/proot-tmp
+PROOT_LOADER=/data/app/.../lib/arm64/libproot_loader.so
+NODE_OPTIONS=--require=/root/.openclaw/node-preload.cjs
+LD_LIBRARY_PATH=/data/app/.../lib/arm64:/data/data/.../files/lib
+OPENCLAW_HOME=/root
+OPENCLAW_DATA=/root/.openclaw/data
+OPENCLAW_GATEWAY_PORT=18789
+ANTHROPIC_API_KEY=<user设置的key>  # 各 provider 的 API key
+...
 ```
 
-这些变量通过 `ProcessBuilder.environment()` 注入到 proot 进程中，proot 会将它们传递给内部的 Debian 进程。
+其中 `NODE_OPTIONS` 注入的 preload 脚本修复了 proot 环境中 `os.networkInterfaces()` 会抛出 EACCES 的问题。这些变量通过 `ProcessBuilder.environment()` 注入到 proot 宿主进程，proot 会将它们传递给内部的 Debian 进程。
 
 ## 安装验证
 
@@ -188,7 +215,7 @@ PROOT_TMP_DIR=/data/.../files/proot-tmp
 |--------|-----------|-----------|------|
 | `node` | `rootfs/usr/bin/node` | `/usr/bin/node` | Node.js 运行时 |
 | `bash` | `rootfs/usr/bin/bash` | `/usr/bin/bash` | Shell |
-| `openclaw` | `rootfs/usr/lib/node_modules/openclaw/bin/openclaw.js` | `/usr/lib/node_modules/openclaw/bin/openclaw.js` | Gateway 入口 |
+| `openclaw` | `rootfs/usr/lib/node_modules/openclaw/openclaw.mjs` | `/usr/lib/node_modules/openclaw/openclaw.mjs` | Gateway 入口 |
 
 任何一个缺失会抛出异常，`RootfsInstaller` 进入 `Error` 状态。
 

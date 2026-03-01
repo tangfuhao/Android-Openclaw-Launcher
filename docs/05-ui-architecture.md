@@ -191,7 +191,7 @@ WELCOME
   │ "Get Started"
   ▼
 DEVICE_CHECK
-  │ 检查 RAM (≥4GB), 存储 (≥2GB), 网络
+  │ 检查 RAM (≥4GB), 存储 (≥3GB), 网络
   │ "Continue" / "Continue Anyway"
   ▼
 DOWNLOAD
@@ -199,8 +199,9 @@ DOWNLOAD
   │ 进度条 + MB 计数器
   ▼
 API_KEY
-  │ 输入 Anthropic/OpenAI API key
-  │ 自动识别 key 前缀: sk-ant- → Anthropic, sk- → OpenAI
+  │ 通过 FilterChip 选择 Provider（7个可选）
+  │ 输入对应 Provider 的 API key
+  │ 通过 ExposedDropdownMenu 选择默认模型
   │ "Save & Continue" / "Skip for Now"
   ▼
 COMPLETE
@@ -214,9 +215,10 @@ COMPLETE
 
 | 段落 | 内容 |
 |------|------|
-| Gateway | 状态显示 (从 ProcessManager.processState 映射)、后台模式开关 |
-| API Keys | Anthropic key 输入框、OpenAI key 输入框（密码遮罩） |
-| Storage | 环境大小信息 |
+| Gateway | 状态显示（从 `ProcessManager.processState` 映射为文字）、后台模式开关 |
+| Model | `ExposedDropdownMenu` 列出已配置 key 的 Provider 下所有模型，未配置时提示先填写 API key |
+| API Providers | 7 个 Provider 卡片（Anthropic / OpenAI / Google / OpenRouter / MiniMax / 智谱 GLM / Kimi），每张卡片有密码遮罩的 API key 输入框，实时保存并触发 `configWriter.writeConfig()` |
+| Storage | 环境大小信息（Linux 环境和 OpenClaw 数据） |
 | About | 版本号 (v0.1.0)、许可证 (GPLv3) |
 
 ## 主题系统

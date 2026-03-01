@@ -95,17 +95,15 @@ Client                                   Gateway
   │        role: "operator",                │
   │        scopes: ["operator.read",        │
   │                 "operator.write",        │
-  │                 "operator.approvals"],   │
-  │        device: {id, nonce, signedAt}    │
+  │                 "operator.approvals",    │
+  │                 "operator.admin"],       │
+  │        auth: {token: <gateway token>}   │
   │      }                                  │
   │                                         │
   │◄──── res: ok ──────────────────────────│
   │      {protocol: 3, policy: {...}}       │
   │                                         │
-  │───── req: chat.subscribe ──────────────►│
-  │      {sessionKey: "main"}               │
-  │                                         │
-  │◄──── 就绪，开始接收 chat 事件 ──────────│
+  │◄──── 就绪，开始接收 chat/approval 事件 ─│
 ```
 
 ### 握手参数详解
@@ -115,24 +113,26 @@ ConnectParams(
     minProtocol = 3,             // 最低支持协议版本
     maxProtocol = 3,             // 最高支持协议版本
     client = ClientInfo(
-        id = "android-openclaw", // 客户端标识
+        id = "openclaw-android", // 客户端标识
         version = "0.1.0",       // App 版本
         platform = "android",    // 平台
-        mode = "operator",       // 角色：操作员
+        mode = "cli",            // 客户端模式
     ),
     role = "operator",           // 连接角色
     scopes = listOf(             // 请求的权限范围
         "operator.read",         // 读取消息
         "operator.write",        // 发送消息
         "operator.approvals",    // 审批工具执行
+        "operator.admin",        // 管理权限
     ),
-    device = DeviceInfo(
-        id = "android-Pixel8-a1b2c3d4",  // 设备唯一 ID
-        nonce = challenge.nonce,          // 来自 challenge 的 nonce
-        signedAt = challenge.ts,          // 来自 challenge 的时间戳
+    auth = AuthInfo(
+        token = "<从 openclaw.json 读取的 gateway auth token>",
     ),
+    device = null,               // Android 客户端不使用设备签名
 )
 ```
+
+**Auth Token 机制：** Gateway 首次启动时会在 `root/.openclaw/openclaw.json` 中生成并写入一个 auth token。`GatewayClient` 在握手前读取该文件中的 `gateway.auth.token` 字段，并将其作为认证凭据发送。
 
 ## 方法清单
 
@@ -162,17 +162,36 @@ ConnectParams(
 
 ### `chat`
 
-聊天消息事件，包含两种子类型：
+聊天消息事件，通过 `state` 字段区分阶段：
 
-**完整消息：**
+**流式 delta（流式生成中，state = "delta"）：**
 ```json
 {
   "type": "event",
   "event": "chat",
   "payload": {
+    "runId": "run-123",
     "sessionKey": "main",
+    "seq": 5,
+    "state": "delta",
     "message": {
-      "id": "msg-123",
+      "role": "assistant",
+      "content": "Hello"
+    }
+  }
+}
+```
+
+**流式完成（state = "final"）：**
+```json
+{
+  "type": "event",
+  "event": "chat",
+  "payload": {
+    "runId": "run-123",
+    "sessionKey": "main",
+    "state": "final",
+    "message": {
       "role": "assistant",
       "content": "Hello! How can I help?",
       "timestamp": 1708000000
@@ -181,23 +200,20 @@ ConnectParams(
 }
 ```
 
-**流式 chunk（流式生成时）：**
+**错误（state = "error"）：**
 ```json
 {
   "type": "event",
   "event": "chat",
   "payload": {
-    "sessionKey": "main",
-    "chunk": {
-      "messageId": "msg-123",
-      "delta": "Hello",
-      "done": false
-    }
+    "runId": "run-123",
+    "state": "error",
+    "errorMessage": "LLM API rate limit exceeded"
   }
 }
 ```
 
-当 `done: true` 时表示流式响应结束。
+`ChatApi.observeChatEvents()` 将这些原始 payload 映射为密封类 `ChatEvent.Delta`、`ChatEvent.Final`、`ChatEvent.Error`。
 
 ### `exec.approval.requested`
 
@@ -286,9 +302,9 @@ class ChatApi(private val gateway: GatewayClient) {
 ```
 
 `ChatEvent` 密封接口：
-- `Message(message: ChatMessage)` — 完整消息
-- `Chunk(messageId, delta, done)` — 流式块
-- `Unknown` — 未知事件（容错）
+- `Delta(runId, content)` — 流式增量（state = "delta"）
+- `Final(runId, message)` — 流式完成（state = "final"）
+- `Error(runId, message)` — 生成错误（state = "error"）
 
 ### ApprovalApi
 

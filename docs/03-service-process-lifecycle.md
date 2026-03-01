@@ -68,11 +68,12 @@ startGateway()
   ├── 构建 proot 命令:
   │   [libproot.so,
   │    --rootfs, /data/.../files/rootfs,
-  │    --bind, /dev, --bind, /proc, --bind, /sys,
-  │    --link2symlink, -0, --cwd, /root,
+  │    --bind=/dev:/dev, --bind=/proc:/proc, --bind=/sys:/sys,
+  │    --bind=/storage:/storage, --cwd=/root,
+  │    --link2symlink, -0,
   │    /usr/bin/node,
-  │    /usr/lib/node_modules/openclaw/bin/openclaw.js,
-  │    gateway, --port, 18789, --bind, 127.0.0.1]
+  │    /usr/lib/node_modules/openclaw/openclaw.mjs,
+  │    gateway, --port, 18789, --bind, loopback, --allow-unconfigured]
   │
   ├── ProcessBuilder (由 ProotExecutor 构建)
   │   ├── .directory(filesDir)           ← 工作目录

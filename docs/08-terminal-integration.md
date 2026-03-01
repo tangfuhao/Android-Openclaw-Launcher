@@ -30,10 +30,13 @@
 │  ┌────────────────────────────────────────────────────┐  │
 │  │ TerminalSession  ← Termux terminal-emulator        │  │
 │  │                                                    │  │
-│  │   shellPath = /data/.../usr/bin/bash               │  │
-│  │   cwd = /data/.../home                             │  │
-│  │   args = [bash, --login]                           │  │
-│  │   env = [HOME=..., PATH=..., PREFIX=..., ...]      │  │
+│  │   shellPath = /data/app/.../lib/arm64/libproot.so  │  │
+│  │   cwd = /data/data/com.openclaw.android/files/     │  │
+│  │   args = [libproot.so, --rootfs=..., --bind=...,   │  │
+│  │           --cwd=/root, --link2symlink, -0,          │  │
+│  │           /usr/bin/bash, --login]                  │  │
+│  │   env = [HOME=/root, PATH=..., PROOT_LOADER=...,  │  │
+│  │          NODE_OPTIONS=..., ANTHROPIC_API_KEY=...]  │  │
 │  │   transcriptRows = 5000                            │  │
 │  │                                                    │  │
 │  │   ┌──────────────────────────────────┐             │  │
@@ -168,16 +171,21 @@ TerminalViewModel.createSession()
   ├── 构建环境变量数组
   │   env.entries.map { "${key}=${value}" }.toTypedArray()
   │
+  ├── prootCommand = prootExecutor.buildCommand(["/usr/bin/bash", "--login"])
+  │
+  ├── envArray = prootExecutor.buildEnvironment()
+  │             .entries.map { "${it.key}=${it.value}" }.toTypedArray()
+  │
   ├── TerminalSession(
-  │     shellPath = "$PREFIX/bin/bash",
-  │     cwd = "$HOME",
-  │     args = ["bash", "--login"],
-  │     env = ["HOME=/data/...", "PATH=...", ...],
+  │     shellPath = prootExecutor.prootBinaryPath,  // nativeLibraryDir/libproot.so
+  │     cwd = paths.root.absolutePath,              // app 的 files/ 目录
+  │     args = prootCommand.toTypedArray(),          // 完整 proot 命令行
+  │     env = envArray,                              // proot 环境变量（含 API Keys）
   │     transcriptRows = 5000,
   │     client = sessionClient
   │   )
   │
-  └── 返回 session （此时 PTY 已创建，bash 已 fork）
+  └── 返回 session （此时 PTY 已创建，proot+bash 已 fork）
 
 TerminalViewModel.attachView(view)
   │

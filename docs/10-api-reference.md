@@ -81,20 +81,41 @@
 | `isRootfsInstalled` | `Flow<Boolean>` | Rootfs 是否安装 |
 | `isGatewayAutostart` | `Flow<Boolean>` | 是否自动启动 Gateway |
 | `isBackgroundEnabled` | `Flow<Boolean>` | 是否启用后台模式 |
-| `anthropicApiKey` | `Flow<String>` | Anthropic API key |
-| `openaiApiKey` | `Flow<String>` | OpenAI API key |
-| `googleApiKey` | `Flow<String>` | Google API key |
-| `selectedModel` | `Flow<String>` | 选中的模型 |
+| `allApiKeys` | `Flow<Map<ApiProvider, String>>` | 所有 Provider 的 API key map |
+| `selectedModel` | `Flow<String>` | 选中的模型 ID |
 | `isSetupCompleted` | `Flow<Boolean>` | 安装向导是否完成 |
+
+| 挂起方法 | 签名 | 说明 |
+|----------|------|------|
+| `setApiKey` | `suspend (provider: ApiProvider, key: String)` | 保存指定 Provider 的 API key |
+| `setSelectedModel` | `suspend (model: String)` | 保存选中模型 |
+| `setBackgroundEnabled` | `suspend (value: Boolean)` | 设置后台模式 |
+| `setSetupCompleted` | `suspend (value: Boolean)` | 标记 Setup 完成 |
+| `setRootfsInstalled` | `suspend (value: Boolean)` | 标记 Rootfs 已安装 |
 
 | 同步方法 | 返回值 | 使用场景 |
 |----------|--------|----------|
 | `isRootfsInstalledSync()` | Boolean | Service / BroadcastReceiver |
 | `isBackgroundEnabledSync()` | Boolean | BroadcastReceiver |
+| `getProviderConfigsSync()` | `Map<ApiProvider, ProviderConfig>` | `OpenClawConfigWriter`（IO 线程） |
+| `getSelectedModelSync()` | String | `OpenClawConfigWriter`（IO 线程） |
+
+**`ApiProvider` 枚举：** `ANTHROPIC`, `OPENAI`, `GOOGLE`, `OPENROUTER`, `MINIMAX_CN`, `ZAI`, `KIMI_CODING`，每个 Provider 持有 `envVarName`、`displayName`、`keyHint`、`defaultModel`、`availableModels`。
 
 ---
 
 ## `com.openclaw.android.proot`
+
+### OpenClawConfigWriter
+- **类型:** `class`
+- **职责:** 在 Gateway 启动前后将用户配置（API Key、模型选择）写入 rootfs 内的 `openclaw.json` 和 `auth-profiles.json`
+
+| 方法 | 签名 | 说明 |
+|------|------|------|
+| `writeConfig` | `()` | 写入 `openclaw.json` 和 `auth-profiles.json`（应在 IO Dispatcher 调用） |
+| `getApiKeyEnvVars` | `() → Map<String, String>` | 返回已配置 Provider 的环境变量 map（供 `ProotExecutor` 注入） |
+
+**两次写入机制：** `ProcessManager.startGateway()` 在启动前和启动后各调用一次 `writeConfig()`，因为 Gateway 初始化时会覆盖 `openclaw.json` 的部分字段（如 auth token）。
 
 ### RootfsState (sealed interface)
 
@@ -233,11 +254,11 @@
 
 | ViewModel | 注入依赖 | 暴露 StateFlow |
 |-----------|----------|---------------|
-| `MainViewModel` | `PreferencesManager` | (仅暴露 preferencesManager) |
+| `MainViewModel` | `PreferencesManager` | （暴露 `preferencesManager` 引用） |
 | `ChatViewModel` | `GatewayClient` | `messages`, `connectionState`, `isLoading`, `pendingApproval` |
 | `TerminalViewModel` | `Context`, `ProotExecutor`, `RootfsInstaller`, `Paths` | `rootfsInstalled`, `fontSize`, `sessionTitle` |
-| `SetupViewModel` | `Context`, `RootfsInstaller`, `PreferencesManager` | `currentStep`, `rootfsState`, `deviceCheck` |
-| `SettingsViewModel` | `PreferencesManager`, `ProcessManager` | `processState`, `backgroundEnabled`, `anthropicKey`, `openaiKey` |
+| `SetupViewModel` | `Context`, `RootfsInstaller`, `PreferencesManager`, `OpenClawConfigWriter` | `currentStep`, `rootfsState`, `deviceCheck` |
+| `SettingsViewModel` | `PreferencesManager`, `ProcessManager`, `OpenClawConfigWriter` | `processState`, `backgroundEnabled`, `apiKeys`, `selectedModel` |
 
 ### Composable 汇总
 
