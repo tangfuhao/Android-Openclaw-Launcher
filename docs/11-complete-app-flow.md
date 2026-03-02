@@ -331,7 +331,7 @@ AI Agent 需要执行敏感操作（如发送邮件、写文件）
         │
         ▼
 Gateway 推送 event: exec.approval.requested
-  {requestId:"apr-X", tool:"send_email", description:"发送邮件到..."}
+  {id:"apr-X", command:"send_email", commandArgv:["--to","user@example.com"], cwd:"/root"}
         │
         ▼
 GatewayClient → dispatchApproval → _approvalRequests.emit(payload)
@@ -353,10 +353,10 @@ ChatScreen: pendingApproval != null → 弹出 ApprovalDialog
   └─────────────────────────────────┘
         │
         ├── 点击 Approve → approvalApi.resolve(id, approved=true)
-        │     └── gateway.request("exec.approval.resolve", {requestId, approved:true})
+        │     └── gateway.request("exec.approval.resolve", {id, decision:"allow"})
         │
         └── 点击 Deny   → approvalApi.resolve(id, approved=false)
-              └── gateway.request("exec.approval.resolve", {requestId, approved:false})
+              └── gateway.request("exec.approval.resolve", {id, decision:"deny"})
 
 Gateway 收到结果 → AI Agent 继续或中止操作
 _pendingApproval.value = null → Dialog 消失

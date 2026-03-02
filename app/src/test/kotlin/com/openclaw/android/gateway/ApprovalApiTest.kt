@@ -30,8 +30,6 @@ class ApprovalApiTest {
         approvalApi = ApprovalApi(gateway)
     }
 
-    // --- observeApprovalRequests ---
-
     @Test
     fun `observeApprovalRequests maps payload correctly`() = runTest {
         val results = mutableListOf<ApprovalApi.ApprovalUiRequest>()
@@ -40,47 +38,44 @@ class ApprovalApiTest {
         }
 
         approvalFlow.emit(ApprovalRequestPayload(
-            requestId = "r1", tool = "bash", description = "Run ls",
+            id = "r1",
+            command = "bash",
+            commandArgv = listOf("-c", "ls -la"),
+            cwd = "/root",
         ))
 
         assertEquals(1, results.size)
         assertEquals("r1", results[0].requestId)
-        assertEquals("bash", results[0].tool)
-        assertEquals("Run ls", results[0].description)
+        assertEquals("bash", results[0].command)
+        assertEquals(listOf("-c", "ls -la"), results[0].commandArgv)
+        assertEquals("/root", results[0].cwd)
 
         job.cancel()
     }
 
     @Test
-    fun `observeApprovalRequests defaults null tool to unknown`() = runTest {
+    fun `observeApprovalRequests displayDescription formats correctly`() = runTest {
         val results = mutableListOf<ApprovalApi.ApprovalUiRequest>()
         val job = launch(UnconfinedTestDispatcher(testScheduler)) {
             approvalApi.observeApprovalRequests().collect { results.add(it) }
         }
 
-        approvalFlow.emit(ApprovalRequestPayload(requestId = "r1", tool = null))
+        approvalFlow.emit(ApprovalRequestPayload(
+            id = "r1",
+            command = "bash",
+            commandArgv = listOf("-c", "rm -rf /tmp"),
+            cwd = "/home",
+        ))
 
-        assertEquals("unknown", results[0].tool)
+        assertTrue(results[0].displayDescription.contains("bash"))
+        assertTrue(results[0].displayDescription.contains("-c rm -rf /tmp"))
+        assertTrue(results[0].displayDescription.contains("(in /home)"))
+
         job.cancel()
     }
 
     @Test
-    fun `observeApprovalRequests defaults null description`() = runTest {
-        val results = mutableListOf<ApprovalApi.ApprovalUiRequest>()
-        val job = launch(UnconfinedTestDispatcher(testScheduler)) {
-            approvalApi.observeApprovalRequests().collect { results.add(it) }
-        }
-
-        approvalFlow.emit(ApprovalRequestPayload(requestId = "r1", description = null))
-
-        assertEquals("The agent wants to execute a tool", results[0].description)
-        job.cancel()
-    }
-
-    // --- resolve ---
-
-    @Test
-    fun `resolve sends correct params for approve`() = runTest {
+    fun `resolve sends id and decision allow`() = runTest {
         val paramsSlot = slot<JsonObject>()
         coEvery { gateway.request("exec.approval.resolve", capture(paramsSlot)) } returns GatewayResponse(
             id = "t", ok = true,
@@ -89,41 +84,19 @@ class ApprovalApiTest {
         approvalApi.resolve("r1", approved = true)
 
         val params = paramsSlot.captured
-        assertEquals("r1", params["requestId"]?.toString()?.trim('"'))
-        assertEquals("true", params["approved"]?.toString())
+        assertEquals("r1", params["id"]?.toString()?.trim('"'))
+        assertEquals("\"allow\"", params["decision"]?.toString())
     }
 
     @Test
-    fun `resolve sends correct params for deny`() = runTest {
+    fun `resolve sends id and decision deny`() = runTest {
         val paramsSlot = slot<JsonObject>()
         coEvery { gateway.request("exec.approval.resolve", capture(paramsSlot)) } returns GatewayResponse(
             id = "t", ok = true,
         )
 
         approvalApi.resolve("r1", approved = false)
-        assertEquals("false", paramsSlot.captured["approved"]?.toString())
-    }
-
-    @Test
-    fun `resolve includes reason when provided`() = runTest {
-        val paramsSlot = slot<JsonObject>()
-        coEvery { gateway.request("exec.approval.resolve", capture(paramsSlot)) } returns GatewayResponse(
-            id = "t", ok = true,
-        )
-
-        approvalApi.resolve("r1", approved = true, reason = "looks safe")
-        assertTrue(paramsSlot.captured.containsKey("reason"))
-    }
-
-    @Test
-    fun `resolve omits reason when null`() = runTest {
-        val paramsSlot = slot<JsonObject>()
-        coEvery { gateway.request("exec.approval.resolve", capture(paramsSlot)) } returns GatewayResponse(
-            id = "t", ok = true,
-        )
-
-        approvalApi.resolve("r1", approved = true, reason = null)
-        assertTrue(!paramsSlot.captured.containsKey("reason"))
+        assertEquals("\"deny\"", paramsSlot.captured["decision"]?.toString())
     }
 
     @Test(expected = ApprovalApi.ApprovalException::class)

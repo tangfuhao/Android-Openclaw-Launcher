@@ -123,7 +123,7 @@ GatewayClient.handleEvent
   ▼ (SharedFlow)
   
 ApprovalApi.observeApprovalRequests()
-  └── map → ApprovalUiRequest(requestId, tool, description)
+  └── map → ApprovalUiRequest(requestId, command, commandArgv, cwd)
   
   ▼ (Flow<ApprovalUiRequest>)
   

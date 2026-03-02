@@ -77,6 +77,10 @@ class OpenClawConfigWriter(
 
         root.put("gateway", JSONObject().apply { put("mode", "local") })
 
+        root.put("messages", JSONObject().apply {
+            put("queue", JSONObject().apply { put("mode", "steer") })
+        })
+
         val selectedModel = preferencesManager.getSelectedModelSync()
         if (selectedModel.isNotBlank()) {
             root.put("agents", JSONObject().apply {

@@ -29,6 +29,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
+import android.os.Build
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -63,7 +64,15 @@ class GatewayClient(
     private var webSocket: WebSocket? = null
     private var reconnectAttempt = 0
     private var reconnectJob: Job? = null
+    private var tickWatchdogJob: Job? = null
     private val connectMutex = Mutex()
+
+    // Tick heartbeat monitoring
+    private var tickIntervalMs: Long = 15_000
+    @Volatile private var lastTickAt: Long = 0
+
+    // Seq gap detection
+    @Volatile private var lastSeq: Long = -1
 
     private val pendingRequests = ConcurrentHashMap<String, CompletableDeferred<GatewayResponse>>()
 
@@ -79,6 +88,9 @@ class GatewayClient(
 
     private val _approvalRequests = MutableSharedFlow<ApprovalRequestPayload>(extraBufferCapacity = 8)
     val approvalRequests: SharedFlow<ApprovalRequestPayload> = _approvalRequests.asSharedFlow()
+
+    private val _agentEvents = MutableSharedFlow<AgentEventPayload>(extraBufferCapacity = 64)
+    val agentEvents: SharedFlow<AgentEventPayload> = _agentEvents.asSharedFlow()
 
     fun connect(
         host: String = OpenClawConstants.GATEWAY_HOST,
@@ -98,6 +110,8 @@ class GatewayClient(
         reconnectAttempt = MAX_RECONNECT_ATTEMPTS // prevent auto-reconnect
         reconnectJob?.cancel()
         reconnectJob = null
+        tickWatchdogJob?.cancel()
+        tickWatchdogJob = null
         webSocket?.close(1000, "Client disconnect")
         webSocket = null
         _connectionState.value = GatewayState.Disconnected("Client initiated")
@@ -167,12 +181,16 @@ class GatewayClient(
             stateVersion = frame.stateVersion,
         )
 
+        checkSeqGap(event.seq)
         scope.launch { _events.emit(event) }
 
         when (event.event) {
             "connect.challenge" -> handleChallenge(event)
             "chat" -> dispatchChatEvent(event)
+            "agent" -> dispatchAgentEvent(event)
             "exec.approval.requested" -> dispatchApproval(event)
+            "tick" -> handleTick(event)
+            "shutdown" -> handleShutdown(event)
         }
     }
 
@@ -211,7 +229,10 @@ class GatewayClient(
         Log.d(TAG, "Auth token available: ${authToken != null}")
 
         val connectParams = ConnectParams(
-            client = ClientInfo(),
+            client = ClientInfo(
+                deviceFamily = Build.MANUFACTURER,
+                modelIdentifier = Build.MODEL,
+            ),
             device = null,
             auth = if (authToken != null) AuthInfo(token = authToken) else AuthInfo(),
         )
@@ -224,8 +245,11 @@ class GatewayClient(
                 try { json.decodeFromJsonElement(HelloOk.serializer(), it) } catch (_: Exception) { null }
             }
             val protocol = helloOk?.protocol ?: OpenClawConstants.GATEWAY_PROTOCOL_VERSION
+            helloOk?.policy?.tickIntervalMs?.let { tickIntervalMs = it }
             _connectionState.value = GatewayState.Connected(protocol)
             reconnectAttempt = 0
+            lastSeq = -1
+            startTickWatchdog()
             Log.i(TAG, "Connected to gateway (protocol v$protocol)")
         } else {
             val errorMsg = response.error?.message ?: "Unknown handshake error"
@@ -243,6 +267,15 @@ class GatewayClient(
         }
     }
 
+    private fun dispatchAgentEvent(event: GatewayEvent) {
+        try {
+            val agentEvent = json.decodeFromJsonElement(AgentEventPayload.serializer(), event.payload)
+            scope.launch { _agentEvents.emit(agentEvent) }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse agent event", e)
+        }
+    }
+
     private fun dispatchApproval(event: GatewayEvent) {
         try {
             val approval = json.decodeFromJsonElement(ApprovalRequestPayload.serializer(), event.payload)
@@ -250,6 +283,52 @@ class GatewayClient(
         } catch (e: Exception) {
             Log.e(TAG, "Failed to parse approval request", e)
         }
+    }
+
+    private fun handleTick(event: GatewayEvent) {
+        lastTickAt = System.currentTimeMillis()
+    }
+
+    private fun handleShutdown(event: GatewayEvent) {
+        try {
+            val payload = json.decodeFromJsonElement(ShutdownEventPayload.serializer(), event.payload)
+            Log.i(TAG, "Gateway shutting down: ${payload.reason}, restart in ${payload.restartExpectedMs}ms")
+            tickWatchdogJob?.cancel()
+            _connectionState.value = GatewayState.Disconnected("Gateway shutdown: ${payload.reason}")
+            payload.restartExpectedMs?.let { expectedMs ->
+                reconnectAttempt = 0
+                scope.launch {
+                    delay(expectedMs + 1000)
+                    connect()
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to parse shutdown event", e)
+        }
+    }
+
+    private fun startTickWatchdog() {
+        tickWatchdogJob?.cancel()
+        lastTickAt = System.currentTimeMillis()
+        tickWatchdogJob = scope.launch {
+            while (true) {
+                delay(tickIntervalMs * 2)
+                val elapsed = System.currentTimeMillis() - lastTickAt
+                if (lastTickAt > 0 && elapsed > tickIntervalMs * 3) {
+                    Log.w(TAG, "Tick timeout (${elapsed}ms since last tick), forcing reconnect")
+                    webSocket?.close(4000, "Tick timeout")
+                    break
+                }
+            }
+        }
+    }
+
+    private fun checkSeqGap(seq: Long?) {
+        if (seq == null) return
+        if (lastSeq >= 0 && seq > lastSeq + 1) {
+            Log.w(TAG, "Event seq gap: expected ${lastSeq + 1}, got $seq (missed ${seq - lastSeq - 1} events)")
+        }
+        lastSeq = seq
     }
 
     private fun failAllPendingRequests(reason: String) {

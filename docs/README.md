@@ -20,6 +20,7 @@
 | **11** | [完整应用启动与运行流程](11-complete-app-flow.md) | 从安装到聊天的端到端全流程，含异常恢复 | **首次了解项目必读** |
 | **12** | [Google Play 兼容性改造 TODO](12-google-play-compatibility-todo.md) | 替代 targetSdk=28 的技术方案分析与分阶段 TODO | 规划 Play 上架时阅读 |
 || **13** | [proot/Android 沙盒约束分析与 TODO](13-proot-android-environment-constraints.md) | 失败域枚举、根因分析、向 OpenClaw 传达环境限制的 TODO | 理解沙盒限制或规划 Agent 环境感知时阅读 |
+|| **14** | [Gateway 协议深度分析](14-gateway-protocol-deep-dive.md) | WS 通道 vs IM 通道逻辑差异、Session/Queue Mode/中断机制、协议合规性 | 理解 OpenClaw 协议本质时阅读 |
 
 ## 推荐阅读顺序
 

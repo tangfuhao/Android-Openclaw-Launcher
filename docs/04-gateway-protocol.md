@@ -4,6 +4,8 @@
 
 Android 端（operator 角色）通过 WebSocket 与本地 OpenClaw Gateway（Node.js 进程）通信。协议版本为 v3，传输格式为 JSON 文本帧。
 
+所有数据类与官方 TypeBox schema 严格对齐，参考文件位于 `reference/openclaw-protocol/`。
+
 ## 连接地址
 
 ```
@@ -29,16 +31,9 @@ ws://127.0.0.1:18789/
   "type": "req",
   "id": "uuid-xxx",
   "method": "chat.send",
-  "params": { "text": "Hello", "sessionKey": "main" }
+  "params": { "message": "Hello", "sessionKey": "main", "idempotencyKey": "uuid-yyy" }
 }
 ```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `type` | string | 固定 `"req"` |
-| `id` | string | 唯一请求 ID（UUID），用于匹配响应 |
-| `method` | string | 方法名 |
-| `params` | object | 方法参数 |
 
 ### Response 帧
 
@@ -47,17 +42,9 @@ ws://127.0.0.1:18789/
   "type": "res",
   "id": "uuid-xxx",
   "ok": true,
-  "payload": { "messageId": "msg-123" }
+  "payload": { "runId": "run-123", "status": "started" }
 }
 ```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `type` | string | 固定 `"res"` |
-| `id` | string | 对应请求的 ID |
-| `ok` | boolean | 是否成功 |
-| `payload` | any? | 成功时的返回数据 |
-| `error` | object? | 失败时的错误信息 `{code, message}` |
 
 ### Event 帧
 
@@ -65,17 +52,11 @@ ws://127.0.0.1:18789/
 {
   "type": "event",
   "event": "chat",
-  "payload": { "chunk": { "messageId": "m1", "delta": "Hello ", "done": false } },
-  "seq": 42
+  "payload": { ... },
+  "seq": 42,
+  "stateVersion": { "presence": 1, "health": 1 }
 }
 ```
-
-| 字段 | 类型 | 说明 |
-|------|------|------|
-| `type` | string | 固定 `"event"` |
-| `event` | string | 事件名称 |
-| `payload` | any | 事件数据 |
-| `seq` | number? | 序列号（可选） |
 
 ## 连接握手流程
 
@@ -91,48 +72,35 @@ Client                                   Gateway
   │      {                                  │
   │        minProtocol: 3,                  │
   │        maxProtocol: 3,                  │
-  │        client: {id, version, platform}, │
+  │        client: {                        │
+  │          id: "openclaw-android",        │
+  │          version: "0.1.0",              │
+  │          platform: "android",           │
+  │          mode: "ui"                     │
+  │        },                               │
   │        role: "operator",                │
   │        scopes: ["operator.read",        │
   │                 "operator.write",        │
   │                 "operator.approvals",    │
   │                 "operator.admin"],       │
+  │        caps: ["tool-events"],           │
   │        auth: {token: <gateway token>}   │
   │      }                                  │
   │                                         │
   │◄──── res: ok ──────────────────────────│
-  │      {protocol: 3, policy: {...}}       │
+  │      {                                  │
+  │        type: "hello-ok",                │
+  │        protocol: 3,                     │
+  │        server: {version, connId},       │
+  │        features: {methods, events},     │
+  │        policy: {                        │
+  │          tickIntervalMs: 15000,         │
+  │          maxPayload, maxBufferedBytes   │
+  │        }                                │
+  │      }                                  │
   │                                         │
-  │◄──── 就绪，开始接收 chat/approval 事件 ─│
+  │◄──── 就绪，开始接收事件 ───────────────│
 ```
-
-### 握手参数详解
-
-```kotlin
-ConnectParams(
-    minProtocol = 3,             // 最低支持协议版本
-    maxProtocol = 3,             // 最高支持协议版本
-    client = ClientInfo(
-        id = "openclaw-android", // 客户端标识
-        version = "0.1.0",       // App 版本
-        platform = "android",    // 平台
-        mode = "cli",            // 客户端模式
-    ),
-    role = "operator",           // 连接角色
-    scopes = listOf(             // 请求的权限范围
-        "operator.read",         // 读取消息
-        "operator.write",        // 发送消息
-        "operator.approvals",    // 审批工具执行
-        "operator.admin",        // 管理权限
-    ),
-    auth = AuthInfo(
-        token = "<从 openclaw.json 读取的 gateway auth token>",
-    ),
-    device = null,               // Android 客户端不使用设备签名
-)
-```
-
-**Auth Token 机制：** Gateway 首次启动时会在 `root/.openclaw/openclaw.json` 中生成并写入一个 auth token。`GatewayClient` 在握手前读取该文件中的 `gateway.auth.token` 字段，并将其作为认证凭据发送。
 
 ## 方法清单
 
@@ -140,15 +108,29 @@ ConnectParams(
 
 | 方法 | 参数 | 返回 | 说明 |
 |------|------|------|------|
-| `chat.send` | `{text, sessionKey}` | `{messageId}` | 发送用户消息 |
-| `chat.history` | `{sessionKey, limit, before?}` | `{messages: [...]}` | 获取历史消息 |
-| `chat.subscribe` | `{sessionKey}` | (none) | 订阅聊天事件流 |
+| `chat.send` | `{message, sessionKey, idempotencyKey, thinking?, attachments?}` | `{runId, status}` | 发送用户消息 |
+| `chat.history` | `{sessionKey, limit?}` | `{messages: [...]}` | 获取历史消息 |
+| `chat.abort` | `{sessionKey, runId?}` | - | 中止当前 run（内部 API） |
+| `chat.inject` | `{sessionKey, message, label?}` | - | 注入系统消息到 transcript |
 
 ### 审批相关
 
 | 方法 | 参数 | 返回 | 说明 |
 |------|------|------|------|
-| `exec.approval.resolve` | `{requestId, approved, reason?}` | (none) | 审批或拒绝工具执行 |
+| `exec.approval.resolve` | `{id, decision}` | - | 审批或拒绝（decision: "allow"\|"deny"） |
+
+### Session 管理
+
+| 方法 | 参数 | 返回 | 说明 |
+|------|------|------|------|
+| `sessions.list` | `{limit?, activeMinutes?, search?}` | `{sessions: [...]}` | 列出 session |
+| `sessions.reset` | `{key, reason?}` | - | 重置 session（reason: "new"\|"reset"） |
+| `sessions.delete` | `{key, deleteTranscript?}` | - | 删除 session |
+| `sessions.compact` | `{key, maxLines?}` | - | 压缩 session 历史 |
+| `sessions.patch` | `{key, model?, thinkingLevel?, ...}` | - | 修改 session 配置 |
+| `sessions.usage` | `{key?, startDate?, endDate?}` | `{...usage data}` | Token 用量统计 |
+
+> **关键**: Session 方法的参数字段名是 `key`（非 `sessionKey`），通过 `@SerialName` 注解对齐。
 
 ## 事件清单
 
@@ -156,64 +138,22 @@ ConnectParams(
 
 连接后 Gateway 发送的第一个事件，包含握手 challenge。
 
-```json
-{"type":"event", "event":"connect.challenge", "payload":{"nonce":"abc123", "ts":1708000000}}
-```
-
 ### `chat`
 
 聊天消息事件，通过 `state` 字段区分阶段：
 
-**流式 delta（流式生成中，state = "delta"）：**
-```json
-{
-  "type": "event",
-  "event": "chat",
-  "payload": {
-    "runId": "run-123",
-    "sessionKey": "main",
-    "seq": 5,
-    "state": "delta",
-    "message": {
-      "role": "assistant",
-      "content": "Hello"
-    }
-  }
-}
-```
+| state | 含义 |
+|-------|------|
+| `"delta"` | 流式生成中 |
+| `"final"` | 流式完成 |
+| `"aborted"` | 已中止 |
+| `"error"` | 生成错误 |
 
-**流式完成（state = "final"）：**
-```json
-{
-  "type": "event",
-  "event": "chat",
-  "payload": {
-    "runId": "run-123",
-    "sessionKey": "main",
-    "state": "final",
-    "message": {
-      "role": "assistant",
-      "content": "Hello! How can I help?",
-      "timestamp": 1708000000
-    }
-  }
-}
-```
+内容为 Claude API content blocks 数组（text / tool_use / tool_result），App 以 Operator 视角渲染。
 
-**错误（state = "error"）：**
-```json
-{
-  "type": "event",
-  "event": "chat",
-  "payload": {
-    "runId": "run-123",
-    "state": "error",
-    "errorMessage": "LLM API rate limit exceeded"
-  }
-}
-```
+### `agent`
 
-`ChatApi.observeChatEvents()` 将这些原始 payload 映射为密封类 `ChatEvent.Delta`、`ChatEvent.Final`、`ChatEvent.Error`。
+Agent 工具执行事件（需要 caps: `["tool-events"]`）。
 
 ### `exec.approval.requested`
 
@@ -224,96 +164,40 @@ Agent 需要执行敏感操作时的审批请求：
   "type": "event",
   "event": "exec.approval.requested",
   "payload": {
-    "requestId": "apr-456",
-    "tool": "send_email",
-    "description": "Send email to user@example.com",
-    "params": {"to": "user@example.com", "subject": "..."}
+    "id": "apr-456",
+    "command": "bash",
+    "commandArgv": ["-c", "rm -rf /tmp/test"],
+    "cwd": "/root"
   }
 }
 ```
 
-## GatewayClient 实现细节
+> **关键**: Approval 事件使用 `id` + `command`（非 `requestId` + `tool`），resolve 使用 `id` + `decision`（非 `requestId` + `approved`）。
 
-### 请求-响应匹配
+### `tick`
 
-每个 `request()` 调用会：
-1. 生成唯一 UUID 作为 `id`
-2. 创建 `CompletableDeferred<GatewayResponse>` 存入 `pendingRequests` 哈希表
-3. 发送 JSON 帧
-4. `await()` 等待响应
+心跳事件，包含 `{ts}` 时间戳。客户端监控 tick 间隔，超时未收到则主动断连重连。间隔从 `HelloOk.policy.tickIntervalMs` 获取。
 
-当收到 `type:"res"` 帧时，用 `id` 从 `pendingRequests` 取出对应的 `Deferred` 并 `complete()`。
+### `shutdown`
 
-```
-pendingRequests: ConcurrentHashMap<String, CompletableDeferred<GatewayResponse>>
+Gateway 即将关闭事件：`{reason, restartExpectedMs?}`。客户端据此安排重连延迟。
 
-request("chat.send", params)         收到 res {id: "uuid-xxx", ok: true}
-  │                                           │
-  ├── id = UUID.random()                      │
-  ├── pendingRequests["uuid-xxx"] = deferred  │
-  ├── ws.send(json)                           │
-  ├── deferred.await() ◄─────────────────────┘
-  └── return response                   pendingRequests.remove("uuid-xxx")
-```
+## 设计决策
 
-### 自动重连
+### Queue Mode: steer
 
-```
-连接断开（非正常关闭 code != 1000）
-  │
-  ├── reconnectAttempt++
-  ├── 超过 10 次? → state = Error, 停止重连
-  │
-  ├── state = Reconnecting
-  ├── delay = 3000ms * min(attempt, 5)
-  │   (3s, 6s, 9s, 12s, 15s, 15s, ...)
-  │
-  └── connect() 重新发起 WebSocket 连接
-```
+App 全局配置 `messages.queue.mode: "steer"`。用户发送的新消息在 Agent 运行期间自动注入当前 run，输入框永远不阻塞。
 
-### 事件分发
+### 无显式 Stop 按钮
 
-`handleEvent()` 根据 `event` 名称将事件路由到不同的 SharedFlow：
+中断通过发送文本实现（`/stop`、`stop`、`停止`、`abort` 等），Gateway 内置中断词检测自动处理。`chat.abort` 仅作为内部异常恢复 API。
 
-| 事件 | 目标 Flow | 消费者 |
-|------|-----------|--------|
-| `connect.challenge` | (内部处理) | `performHandshake()` |
-| `chat` | `chatEvents: SharedFlow<ChatEventPayload>` | `ChatApi.observeChatEvents()` |
-| `exec.approval.requested` | `approvalRequests: SharedFlow<ApprovalRequestPayload>` | `ApprovalApi.observeApprovalRequests()` |
-| (其他) | `events: SharedFlow<GatewayEvent>` | 通用事件监听 |
+### Operator 视角渲染
 
-## 上层 API 封装
+WebSocket 路径收到的是 Agent 原始思维过程（含 tool_use/tool_result），App 以 Operator 视角渲染：
+- `tool_use` → 可折叠工具执行卡片
+- `tool_result` → 代码块（可折叠）
 
-### ChatApi
+### 未来远程网关
 
-`ChatApi` 在 `GatewayClient` 之上提供类型安全的聊天操作：
-
-```kotlin
-class ChatApi(private val gateway: GatewayClient) {
-    // 发消息，返回消息 ID
-    suspend fun sendMessage(text: String, sessionKey: String = "main"): String
-
-    // 获取历史，返回 List<ChatMessage>（domain model）
-    suspend fun getHistory(sessionKey: String, limit: Int, before: String?): List<ChatMessage>
-
-    // 订阅实时事件流，转换为 domain ChatEvent
-    fun observeChatEvents(): Flow<ChatEvent>
-}
-```
-
-`ChatEvent` 密封接口：
-- `Delta(runId, content)` — 流式增量（state = "delta"）
-- `Final(runId, message)` — 流式完成（state = "final"）
-- `Error(runId, message)` — 生成错误（state = "error"）
-
-### ApprovalApi
-
-```kotlin
-class ApprovalApi(private val gateway: GatewayClient) {
-    // 监听审批请求
-    fun observeApprovalRequests(): Flow<ApprovalUiRequest>
-
-    // 审批或拒绝
-    suspend fun resolve(requestId: String, approved: Boolean, reason: String?)
-}
-```
+`GatewayConnectionConfig` 抽象了连接配置（Local/Remote），协议层完全不变，切换远程只需注入 `Remote` 配置。

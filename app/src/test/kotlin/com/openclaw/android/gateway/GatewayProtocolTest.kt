@@ -129,11 +129,13 @@ class GatewayProtocolTest {
     }
 
     @Test
-    fun `ApprovalRequestPayload deserializes`() {
-        val raw = """{"requestId":"r1","tool":"bash","description":"Run ls -la","params":{"command":"ls -la"}}"""
+    fun `ApprovalRequestPayload deserializes official schema`() {
+        val raw = """{"id":"r1","command":"bash","commandArgv":["-c","ls -la"],"cwd":"/root"}"""
         val approval = json.decodeFromString(ApprovalRequestPayload.serializer(), raw)
-        assertEquals("r1", approval.requestId)
-        assertEquals("bash", approval.tool)
+        assertEquals("r1", approval.id)
+        assertEquals("bash", approval.command)
+        assertEquals(listOf("-c", "ls -la"), approval.commandArgv)
+        assertEquals("/root", approval.cwd)
     }
 
     @Test
@@ -175,7 +177,7 @@ class GatewayProtocolTest {
     fun `ClientInfo defaults to openclaw-android`() {
         val info = ClientInfo()
         assertEquals("openclaw-android", info.id)
-        assertEquals("cli", info.mode)
+        assertEquals("ui", info.mode)
     }
 
     @Test
@@ -186,9 +188,200 @@ class GatewayProtocolTest {
 
     @Test
     fun `ApprovalResolveParams round-trip`() {
-        val original = ApprovalResolveParams(requestId = "r1", approved = true, reason = "looks safe")
+        val original = ApprovalResolveParams(id = "r1", decision = "allow")
         val text = json.encodeToString(ApprovalResolveParams.serializer(), original)
         val decoded = json.decodeFromString(ApprovalResolveParams.serializer(), text)
+        assertEquals(original, decoded)
+        assertTrue(text.contains("\"decision\":\"allow\""))
+    }
+
+    @Test
+    fun `ConnectParams default caps includes tool-events`() {
+        val params = ConnectParams(client = ClientInfo())
+        assertTrue(params.caps.contains("tool-events"))
+    }
+
+    @Test
+    fun `ChatSendParams with attachments round-trip`() {
+        val original = ChatSendParams(
+            message = "analyze this",
+            idempotencyKey = "k-1",
+            attachments = listOf(ChatAttachment(type = "image", mimeType = "image/png", fileName = "test.png", content = "base64data")),
+            thinking = "high",
+        )
+        val text = json.encodeToString(ChatSendParams.serializer(), original)
+        val decoded = json.decodeFromString(ChatSendParams.serializer(), text)
+        assertEquals(original, decoded)
+        assertTrue(text.contains("\"attachments\""))
+        assertTrue(text.contains("\"thinking\":\"high\""))
+    }
+
+    @Test
+    fun `ChatSendParams without optional fields omits them`() {
+        val params = ChatSendParams(message = "hello", idempotencyKey = "k-2")
+        val text = json.encodeToString(ChatSendParams.serializer(), params)
+        assertTrue(!text.contains("\"attachments\""))
+        assertTrue(!text.contains("\"thinking\""))
+        assertTrue(!text.contains("\"deliver\""))
+    }
+
+    @Test
+    fun `ChatAbortParams round-trip`() {
+        val original = ChatAbortParams(sessionKey = "main", runId = "run-1")
+        val text = json.encodeToString(ChatAbortParams.serializer(), original)
+        val decoded = json.decodeFromString(ChatAbortParams.serializer(), text)
+        assertEquals(original, decoded)
+    }
+
+    @Test
+    fun `ChatEventPayload with aborted state`() {
+        val raw = """{"runId":"run1","sessionKey":"main","seq":4,"state":"aborted"}"""
+        val payload = json.decodeFromString(ChatEventPayload.serializer(), raw)
+        assertEquals("aborted", payload.state)
+        assertNull(payload.message)
+    }
+
+    @Test
+    fun `ChatEventPayload with usage and stopReason`() {
+        val raw = """{"runId":"run1","sessionKey":"main","seq":5,"state":"final","usage":{"inputTokens":100,"outputTokens":50},"stopReason":"end_turn"}"""
+        val payload = json.decodeFromString(ChatEventPayload.serializer(), raw)
+        assertEquals("final", payload.state)
+        assertNotNull(payload.usage)
+        assertEquals("end_turn", payload.stopReason)
+    }
+
+    @Test
+    fun `AgentEventPayload deserializes tool stream`() {
+        val raw = """{"runId":"run1","sessionKey":"main","stream":"tool","seq":3,"ts":1700000000,"data":{"toolName":"bash","phase":"start"}}"""
+        val evt = json.decodeFromString(AgentEventPayload.serializer(), raw)
+        assertEquals("run1", evt.runId)
+        assertEquals("tool", evt.stream)
+        assertEquals(3, evt.seq)
+        assertNotNull(evt.data)
+    }
+
+    @Test
+    fun `AgentEventPayload deserializes lifecycle stream`() {
+        val raw = """{"runId":"run1","stream":"lifecycle","seq":1,"data":{"phase":"end"}}"""
+        val evt = json.decodeFromString(AgentEventPayload.serializer(), raw)
+        assertEquals("lifecycle", evt.stream)
+    }
+
+    @Test
+    fun `HelloOk features deserializes methods and events`() {
+        val raw = """{"type":"hello-ok","protocol":3,"server":{"version":"1.0","connId":"c1"},"features":{"methods":["chat.send","chat.abort","chat.history"],"events":["chat","agent","exec.approval.requested"]},"snapshot":{},"policy":{"maxPayload":1000000,"maxBufferedBytes":5000000,"tickIntervalMs":15000}}"""
+        val helloOk = json.decodeFromString(HelloOk.serializer(), raw)
+        assertNotNull(helloOk.features)
+        assertTrue(helloOk.features!!.methods.contains("chat.abort"))
+        assertTrue(helloOk.features!!.events.contains("agent"))
+    }
+
+    @Test
+    fun `ClientInfo with device info serializes`() {
+        val info = ClientInfo(deviceFamily = "Google", modelIdentifier = "Pixel 9")
+        val text = json.encodeToString(ClientInfo.serializer(), info)
+        assertTrue(text.contains("\"deviceFamily\":\"Google\""))
+        assertTrue(text.contains("\"modelIdentifier\":\"Pixel 9\""))
+    }
+
+    @Test
+    fun `SessionsPatchParams round-trip`() {
+        val original = SessionsPatchParams(sessionKey = "main", model = "claude-opus-4-6", thinkingLevel = "high")
+        val text = json.encodeToString(SessionsPatchParams.serializer(), original)
+        val decoded = json.decodeFromString(SessionsPatchParams.serializer(), text)
+        assertEquals(original, decoded)
+    }
+
+    // ── @SerialName wire field alignment tests ────────────────────
+
+    @Test
+    fun `SessionsResetParams serializes key not sessionKey`() {
+        val params = SessionsResetParams(sessionKey = "test-session")
+        val text = json.encodeToString(SessionsResetParams.serializer(), params)
+        assertTrue("Wire field must be 'key'", text.contains("\"key\":\"test-session\""))
+        assertTrue("Must not contain sessionKey", !text.contains("\"sessionKey\""))
+    }
+
+    @Test
+    fun `SessionsDeleteParams serializes key not sessionKey`() {
+        val params = SessionsDeleteParams(sessionKey = "to-delete")
+        val text = json.encodeToString(SessionsDeleteParams.serializer(), params)
+        assertTrue(text.contains("\"key\":\"to-delete\""))
+        assertTrue(!text.contains("\"sessionKey\""))
+    }
+
+    @Test
+    fun `SessionsCompactParams serializes key not sessionKey`() {
+        val params = SessionsCompactParams(sessionKey = "main")
+        val text = json.encodeToString(SessionsCompactParams.serializer(), params)
+        assertTrue(text.contains("\"key\":\"main\""))
+        assertTrue(!text.contains("\"sessionKey\""))
+    }
+
+    @Test
+    fun `SessionsPatchParams serializes key not sessionKey`() {
+        val params = SessionsPatchParams(sessionKey = "main", model = "test-model")
+        val text = json.encodeToString(SessionsPatchParams.serializer(), params)
+        assertTrue(text.contains("\"key\":\"main\""))
+        assertTrue(!text.contains("\"sessionKey\""))
+    }
+
+    @Test
+    fun `SessionsUsageParams serializes key not sessionKey`() {
+        val params = SessionsUsageParams(sessionKey = "main")
+        val text = json.encodeToString(SessionsUsageParams.serializer(), params)
+        assertTrue(text.contains("\"key\":\"main\""))
+        assertTrue(!text.contains("\"sessionKey\""))
+    }
+
+    @Test
+    fun `ApprovalResolveParams uses id and decision wire fields`() {
+        val params = ApprovalResolveParams(id = "apr-1", decision = "deny")
+        val text = json.encodeToString(ApprovalResolveParams.serializer(), params)
+        assertTrue(text.contains("\"id\":\"apr-1\""))
+        assertTrue(text.contains("\"decision\":\"deny\""))
+    }
+
+    // ── New types tests ──────────────────────────────────────────
+
+    @Test
+    fun `TickEventPayload deserializes`() {
+        val raw = """{"ts":1700000000}"""
+        val tick = json.decodeFromString(TickEventPayload.serializer(), raw)
+        assertEquals(1700000000L, tick.ts)
+    }
+
+    @Test
+    fun `ShutdownEventPayload deserializes`() {
+        val raw = """{"reason":"restart","restartExpectedMs":5000}"""
+        val shutdown = json.decodeFromString(ShutdownEventPayload.serializer(), raw)
+        assertEquals("restart", shutdown.reason)
+        assertEquals(5000L, shutdown.restartExpectedMs)
+    }
+
+    @Test
+    fun `ServerInfo in HelloOk parses correctly`() {
+        val raw = """{"type":"hello-ok","protocol":3,"server":{"version":"1.2.3","connId":"conn-abc"}}"""
+        val helloOk = json.decodeFromString(HelloOk.serializer(), raw)
+        assertNotNull(helloOk.server)
+        assertEquals("1.2.3", helloOk.server?.version)
+        assertEquals("conn-abc", helloOk.server?.connId)
+    }
+
+    @Test
+    fun `ChatInjectParams round-trip`() {
+        val original = ChatInjectParams(sessionKey = "main", message = "system context", label = "setup")
+        val text = json.encodeToString(ChatInjectParams.serializer(), original)
+        val decoded = json.decodeFromString(ChatInjectParams.serializer(), text)
+        assertEquals(original, decoded)
+    }
+
+    @Test
+    fun `SessionsResetParams with reason round-trip`() {
+        val original = SessionsResetParams(sessionKey = "main", reason = "new")
+        val text = json.encodeToString(SessionsResetParams.serializer(), original)
+        assertTrue(text.contains("\"reason\":\"new\""))
+        val decoded = json.decodeFromString(SessionsResetParams.serializer(), text)
         assertEquals(original, decoded)
     }
 }

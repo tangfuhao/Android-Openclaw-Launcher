@@ -7,28 +7,28 @@ import kotlinx.serialization.json.put
 
 /**
  * Handles tool execution approval requests from the OpenClaw agent.
- * When the agent wants to perform a sensitive operation (send email, run command, etc.),
- * it sends an approval request that must be resolved by the operator.
+ *
+ * Wire format aligned with exec-approvals.ts:
+ * - Request event payload: {id, command, commandArgv?, cwd?, ...}
+ * - Resolve params: {id, decision}  (decision: "allow" | "deny")
  */
 class ApprovalApi(private val gateway: GatewayClient) {
 
-    /** Observable stream of approval requests from the agent. */
     fun observeApprovalRequests(): Flow<ApprovalUiRequest> {
         return gateway.approvalRequests.map { payload ->
             ApprovalUiRequest(
-                requestId = payload.requestId,
-                tool = payload.tool ?: "unknown",
-                description = payload.description ?: "The agent wants to execute a tool",
+                requestId = payload.id,
+                command = payload.command,
+                commandArgv = payload.commandArgv,
+                cwd = payload.cwd,
             )
         }
     }
 
-    /** Approve or deny a pending tool execution request. */
     suspend fun resolve(requestId: String, approved: Boolean, reason: String? = null) {
         val response = gateway.request("exec.approval.resolve", buildJsonObject {
-            put("requestId", requestId)
-            put("approved", approved)
-            reason?.let { put("reason", it) }
+            put("id", requestId)
+            put("decision", if (approved) "allow" else "deny")
         })
 
         if (!response.ok) {
@@ -38,9 +38,20 @@ class ApprovalApi(private val gateway: GatewayClient) {
 
     data class ApprovalUiRequest(
         val requestId: String,
-        val tool: String,
-        val description: String,
-    )
+        val command: String,
+        val commandArgv: List<String>? = null,
+        val cwd: String? = null,
+    ) {
+        val displayDescription: String
+            get() = buildString {
+                append(command)
+                if (!commandArgv.isNullOrEmpty()) {
+                    append(" ")
+                    append(commandArgv.joinToString(" "))
+                }
+                if (cwd != null) append(" (in $cwd)")
+            }
+    }
 
     class ApprovalException(message: String) : RuntimeException(message)
 }

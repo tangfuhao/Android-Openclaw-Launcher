@@ -1,5 +1,6 @@
 package com.openclaw.android.gateway
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -7,15 +8,14 @@ import kotlinx.serialization.json.JsonObject
 /**
  * Wire-format types for the OpenClaw Gateway WebSocket protocol v3.
  *
- * Three frame types:
- * - Request:  client -> gateway  (method calls)
- * - Response: gateway -> client  (method results)
- * - Event:    gateway -> client  (push notifications)
+ * All field names are aligned with the official TypeBox schemas at:
+ *   reference/openclaw-protocol/schema/
  *
- * All frames are JSON text, discriminated by the `type` field.
+ * Where Kotlin property names differ from JSON wire names,
+ * @SerialName is used to ensure correct serialization.
  */
 
-// --- Outgoing (client -> gateway) ---
+// ── Frame types ─────────────────────────────────────────────────────
 
 @Serializable
 data class GatewayRequest(
@@ -24,8 +24,6 @@ data class GatewayRequest(
     val method: String,
     val params: JsonObject = JsonObject(emptyMap()),
 )
-
-// --- Incoming (gateway -> client) ---
 
 @Serializable
 data class GatewayResponse(
@@ -45,8 +43,6 @@ data class GatewayEvent(
     val stateVersion: JsonElement? = null,
 )
 
-// --- Generic incoming frame (for initial parsing) ---
-
 @Serializable
 data class GatewayFrame(
     val type: String,
@@ -62,9 +58,15 @@ data class GatewayFrame(
 )
 
 @Serializable
-data class JsonError(val code: String? = null, val message: String? = null)
+data class JsonError(
+    val code: String? = null,
+    val message: String? = null,
+    val details: JsonElement? = null,
+    val retryable: Boolean? = null,
+    val retryAfterMs: Int? = null,
+)
 
-// --- Connect handshake types ---
+// ── Connect handshake (frames.ts) ───────────────────────────────────
 
 @Serializable
 data class ConnectChallenge(
@@ -78,8 +80,11 @@ data class ConnectParams(
     val maxProtocol: Int = 3,
     val client: ClientInfo,
     val role: String = "operator",
-    val scopes: List<String> = listOf("operator.read", "operator.write", "operator.approvals", "operator.admin"),
-    val caps: List<String> = emptyList(),
+    val scopes: List<String> = listOf(
+        "operator.read", "operator.write",
+        "operator.approvals", "operator.admin",
+    ),
+    val caps: List<String> = listOf("tool-events"),
     val commands: List<String> = emptyList(),
     val permissions: JsonObject = JsonObject(emptyMap()),
     val auth: AuthInfo = AuthInfo(),
@@ -93,33 +98,51 @@ data class ClientInfo(
     val id: String = "openclaw-android",
     val version: String = "0.1.0",
     val platform: String = "android",
-    val mode: String = "cli",
+    val mode: String = "ui",
+    val displayName: String? = null,
+    val deviceFamily: String? = null,
+    val modelIdentifier: String? = null,
+    val instanceId: String? = null,
 )
 
 @Serializable
 data class AuthInfo(
     val token: String? = null,
+    val deviceToken: String? = null,
+    val password: String? = null,
 )
 
 @Serializable
 data class DeviceInfo(
     val id: String,
-    val publicKey: String = "",
-    val signature: String = "",
-    val signedAt: Long? = null,
-    val nonce: String? = null,
+    val publicKey: String,
+    val signature: String,
+    val signedAt: Long,
+    val nonce: String,
 )
 
 @Serializable
 data class HelloOk(
     val type: String = "hello-ok",
     val protocol: Int = 3,
-    val server: JsonElement? = null,
-    val features: JsonElement? = null,
+    val server: ServerInfo? = null,
+    val features: HelloFeatures? = null,
     val snapshot: JsonElement? = null,
     val canvasHostUrl: String? = null,
     val policy: PolicyInfo? = null,
     val auth: HelloAuth? = null,
+)
+
+@Serializable
+data class ServerInfo(
+    val version: String,
+    val connId: String,
+)
+
+@Serializable
+data class HelloFeatures(
+    val methods: List<String> = emptyList(),
+    val events: List<String> = emptyList(),
 )
 
 @Serializable
@@ -134,15 +157,41 @@ data class HelloAuth(
     val deviceToken: String? = null,
     val role: String? = null,
     val scopes: List<String>? = null,
+    val issuedAtMs: Long? = null,
 )
 
-// --- Chat message types ---
+// ── Server push events (frames.ts) ─────────────────────────────────
+
+@Serializable
+data class TickEventPayload(
+    val ts: Long,
+)
+
+@Serializable
+data class ShutdownEventPayload(
+    val reason: String,
+    val restartExpectedMs: Long? = null,
+)
+
+// ── Chat methods (logs-chat.ts) ─────────────────────────────────────
 
 @Serializable
 data class ChatSendParams(
     val message: String,
     val sessionKey: String = "main",
     val idempotencyKey: String,
+    val attachments: List<ChatAttachment>? = null,
+    val thinking: String? = null,
+    val deliver: Boolean? = null,
+    val timeoutMs: Int? = null,
+)
+
+@Serializable
+data class ChatAttachment(
+    val type: String? = null,
+    val mimeType: String? = null,
+    val fileName: String? = null,
+    val content: String? = null,
 )
 
 @Serializable
@@ -151,9 +200,22 @@ data class ChatHistoryParams(
     val limit: Int = 50,
 )
 
+@Serializable
+data class ChatAbortParams(
+    val sessionKey: String = "main",
+    val runId: String? = null,
+)
+
+@Serializable
+data class ChatInjectParams(
+    val sessionKey: String,
+    val message: String,
+    val label: String? = null,
+)
+
 /**
  * Chat event payload broadcast by the gateway.
- * States: "delta" (streaming), "final" (complete), "error"
+ * States: "delta" (streaming), "final" (complete), "aborted", "error"
  */
 @Serializable
 data class ChatEventPayload(
@@ -163,6 +225,8 @@ data class ChatEventPayload(
     val state: String? = null,
     val message: ChatMessagePayload? = null,
     val errorMessage: String? = null,
+    val usage: JsonElement? = null,
+    val stopReason: String? = null,
 )
 
 @Serializable
@@ -172,19 +236,91 @@ data class ChatMessagePayload(
     val timestamp: Long? = null,
 )
 
-// --- Approval types ---
+// ── Agent events (agent.ts, requires caps: ["tool-events"]) ─────────
+
+@Serializable
+data class AgentEventPayload(
+    val runId: String? = null,
+    val sessionKey: String? = null,
+    val stream: String? = null,
+    val seq: Int = 0,
+    val ts: Long? = null,
+    val data: JsonElement? = null,
+)
+
+// ── Exec approvals (exec-approvals.ts) ──────────────────────────────
 
 @Serializable
 data class ApprovalRequestPayload(
-    val requestId: String,
-    val tool: String? = null,
-    val description: String? = null,
-    val params: JsonObject? = null,
+    val id: String,
+    val command: String,
+    val commandArgv: List<String>? = null,
+    val cwd: String? = null,
+    val nodeId: String? = null,
+    val sessionKey: String? = null,
+    val timeoutMs: Int? = null,
 )
 
 @Serializable
 data class ApprovalResolveParams(
-    val requestId: String,
-    val approved: Boolean,
+    val id: String,
+    val decision: String,
+)
+
+// ── Session management (sessions.ts) ────────────────────────────────
+// Wire field is "key"; @SerialName keeps Kotlin property readable.
+
+@Serializable
+data class SessionsListParams(
+    val limit: Int? = null,
+    val activeMinutes: Int? = null,
+    val includeDerivedTitles: Boolean? = null,
+    val includeLastMessage: Boolean? = null,
+    val label: String? = null,
+    val search: String? = null,
+)
+
+@Serializable
+data class SessionsResetParams(
+    @SerialName("key") val sessionKey: String,
     val reason: String? = null,
+)
+
+@Serializable
+data class SessionsDeleteParams(
+    @SerialName("key") val sessionKey: String,
+    val deleteTranscript: Boolean? = null,
+)
+
+@Serializable
+data class SessionsCompactParams(
+    @SerialName("key") val sessionKey: String,
+    val maxLines: Int? = null,
+)
+
+@Serializable
+data class SessionsPatchParams(
+    @SerialName("key") val sessionKey: String,
+    val model: String? = null,
+    val thinkingLevel: String? = null,
+    val verboseLevel: String? = null,
+    val reasoningLevel: String? = null,
+    val responseUsage: String? = null,
+    val elevatedLevel: String? = null,
+    val execHost: String? = null,
+    val execSecurity: String? = null,
+    val execAsk: String? = null,
+    val execNode: String? = null,
+    val sendPolicy: String? = null,
+    val groupActivation: String? = null,
+    val label: String? = null,
+)
+
+@Serializable
+data class SessionsUsageParams(
+    @SerialName("key") val sessionKey: String? = null,
+    val startDate: String? = null,
+    val endDate: String? = null,
+    val limit: Int? = null,
+    val includeContextWeight: Boolean? = null,
 )

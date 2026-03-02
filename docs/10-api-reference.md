@@ -197,7 +197,7 @@
 | 方法 | 签名 | 说明 |
 |------|------|------|
 | `observeApprovalRequests` | `() → Flow<ApprovalUiRequest>` | 审批请求流 |
-| `resolve` | `suspend (requestId, approved, reason?)` | 审批/拒绝 |
+| `resolve` | `suspend (requestId, approved, reason?)` | 审批/拒绝（wire: `{id, decision}`) |
 
 ---
 

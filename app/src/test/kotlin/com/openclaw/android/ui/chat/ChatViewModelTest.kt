@@ -1,12 +1,15 @@
 package com.openclaw.android.ui.chat
 
 import com.openclaw.android.data.ChatMessage
+import com.openclaw.android.data.ContentBlock
+import com.openclaw.android.gateway.AgentEventPayload
 import com.openclaw.android.gateway.ApprovalRequestPayload
 import com.openclaw.android.gateway.ChatEventPayload
 import com.openclaw.android.gateway.ChatMessagePayload
 import com.openclaw.android.gateway.GatewayClient
 import com.openclaw.android.gateway.GatewayResponse
 import com.openclaw.android.gateway.GatewayState
+import com.openclaw.android.proot.FileBridge
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -22,7 +25,6 @@ import kotlinx.coroutines.test.setMain
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
-import kotlinx.serialization.json.putJsonArray
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -37,9 +39,11 @@ class ChatViewModelTest {
     private val testDispatcher = StandardTestDispatcher()
 
     private lateinit var gatewayClient: GatewayClient
+    private lateinit var fileBridge: FileBridge
     private lateinit var connectionStateFlow: MutableStateFlow<GatewayState>
     private lateinit var chatEventsFlow: MutableSharedFlow<ChatEventPayload>
     private lateinit var approvalRequestsFlow: MutableSharedFlow<ApprovalRequestPayload>
+    private lateinit var agentEventsFlow: MutableSharedFlow<AgentEventPayload>
 
     private lateinit var viewModel: ChatViewModel
 
@@ -48,15 +52,18 @@ class ChatViewModelTest {
         Dispatchers.setMain(testDispatcher)
 
         gatewayClient = mockk(relaxed = true)
+        fileBridge = mockk(relaxed = true)
         connectionStateFlow = MutableStateFlow(GatewayState.Idle)
         chatEventsFlow = MutableSharedFlow()
         approvalRequestsFlow = MutableSharedFlow()
+        agentEventsFlow = MutableSharedFlow()
 
         every { gatewayClient.connectionState } returns connectionStateFlow
         every { gatewayClient.chatEvents } returns chatEventsFlow
         every { gatewayClient.approvalRequests } returns approvalRequestsFlow
+        every { gatewayClient.agentEvents } returns agentEventsFlow
 
-        viewModel = ChatViewModel(gatewayClient)
+        viewModel = ChatViewModel(gatewayClient, fileBridge)
     }
 
     @After
@@ -96,7 +103,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(1, viewModel.messages.value.size)
-        assertEquals("hello world", viewModel.messages.value[0].content)
+        assertEquals("hello world", viewModel.messages.value[0].textContent)
         assertEquals(ChatMessage.Role.USER, viewModel.messages.value[0].role)
     }
 
@@ -131,7 +138,7 @@ class ChatViewModelTest {
 
         assertEquals(1, viewModel.messages.value.size)
         assertEquals(ChatMessage.Role.ASSISTANT, viewModel.messages.value[0].role)
-        assertEquals("Hello", viewModel.messages.value[0].content)
+        assertEquals("Hello", viewModel.messages.value[0].textContent)
         assertTrue(viewModel.messages.value[0].isStreaming)
     }
 
@@ -152,7 +159,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(1, viewModel.messages.value.size)
-        assertEquals("Hello World", viewModel.messages.value[0].content)
+        assertEquals("Hello World", viewModel.messages.value[0].textContent)
     }
 
     // --- Final events ---
@@ -174,7 +181,7 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(1, viewModel.messages.value.size)
-        assertEquals("Final content", viewModel.messages.value[0].content)
+        assertEquals("Final content", viewModel.messages.value[0].textContent)
         assertEquals(false, viewModel.messages.value[0].isStreaming)
     }
 
@@ -189,7 +196,30 @@ class ChatViewModelTest {
         advanceUntilIdle()
 
         assertEquals(1, viewModel.messages.value.size)
-        assertEquals("Complete", viewModel.messages.value[0].content)
+        assertEquals("Complete", viewModel.messages.value[0].textContent)
+    }
+
+    // --- Aborted events ---
+
+    @Test
+    fun `aborted event stops streaming on existing message`() = runTest {
+        advanceUntilIdle()
+
+        chatEventsFlow.emit(ChatEventPayload(
+            runId = "run1", state = "delta",
+            message = ChatMessagePayload(role = "assistant", content = JsonPrimitive("partial...")),
+        ))
+        advanceUntilIdle()
+        assertTrue(viewModel.messages.value[0].isStreaming)
+
+        chatEventsFlow.emit(ChatEventPayload(
+            runId = "run1", state = "aborted",
+        ))
+        advanceUntilIdle()
+
+        assertEquals(1, viewModel.messages.value.size)
+        assertEquals(false, viewModel.messages.value[0].isStreaming)
+        assertEquals("partial...", viewModel.messages.value[0].textContent)
     }
 
     // --- Error events ---
@@ -205,7 +235,7 @@ class ChatViewModelTest {
 
         assertEquals(1, viewModel.messages.value.size)
         assertEquals(ChatMessage.Role.SYSTEM, viewModel.messages.value[0].role)
-        assertTrue(viewModel.messages.value[0].content.contains("API key invalid"))
+        assertTrue(viewModel.messages.value[0].textContent.contains("API key invalid"))
     }
 
     @Test
@@ -224,7 +254,7 @@ class ChatViewModelTest {
     fun `approval request sets pendingApproval`() = runTest {
         advanceUntilIdle()
 
-        approvalRequestsFlow.emit(ApprovalRequestPayload(requestId = "a1", tool = "bash", description = "rm -rf /"))
+        approvalRequestsFlow.emit(ApprovalRequestPayload(id = "a1", command = "bash", commandArgv = listOf("-c", "rm -rf /")))
         advanceUntilIdle()
 
         val approval = viewModel.pendingApproval.value
@@ -236,7 +266,7 @@ class ChatViewModelTest {
     fun `resolveApproval clears pending approval on success`() = runTest {
         advanceUntilIdle()
 
-        approvalRequestsFlow.emit(ApprovalRequestPayload(requestId = "a1", tool = "bash", description = "run ls"))
+        approvalRequestsFlow.emit(ApprovalRequestPayload(id = "a1", command = "bash"))
         advanceUntilIdle()
         assertNotNull(viewModel.pendingApproval.value)
 

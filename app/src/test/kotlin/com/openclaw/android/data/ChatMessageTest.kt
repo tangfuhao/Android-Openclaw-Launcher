@@ -9,29 +9,67 @@ class ChatMessageTest {
 
     @Test
     fun `default status is SENT`() {
-        val msg = ChatMessage(id = "1", role = ChatMessage.Role.USER, content = "hi")
+        val msg = ChatMessage.ofText(id = "1", role = ChatMessage.Role.USER, text = "hi")
         assertEquals(ChatMessage.Status.SENT, msg.status)
     }
 
     @Test
     fun `default isStreaming is false`() {
-        val msg = ChatMessage(id = "1", role = ChatMessage.Role.USER, content = "hi")
+        val msg = ChatMessage.ofText(id = "1", role = ChatMessage.Role.USER, text = "hi")
         assertFalse(msg.isStreaming)
     }
 
     @Test
-    fun `copy updates content while preserving other fields`() {
+    fun `textContent returns concatenated text blocks`() {
         val msg = ChatMessage(
             id = "1",
             role = ChatMessage.Role.ASSISTANT,
-            content = "hello",
+            contentBlocks = listOf(
+                ContentBlock.Text("hello"),
+                ContentBlock.Text("world"),
+            ),
+        )
+        assertEquals("hello\nworld", msg.textContent)
+    }
+
+    @Test
+    fun `textContent ignores non-text blocks`() {
+        val msg = ChatMessage(
+            id = "1",
+            role = ChatMessage.Role.ASSISTANT,
+            contentBlocks = listOf(
+                ContentBlock.Text("hello"),
+                ContentBlock.ToolUse(toolId = "t1", name = "bash", input = kotlinx.serialization.json.JsonObject(emptyMap())),
+                ContentBlock.Text("world"),
+            ),
+        )
+        assertEquals("hello\nworld", msg.textContent)
+    }
+
+    @Test
+    fun `copy updates contentBlocks while preserving other fields`() {
+        val msg = ChatMessage(
+            id = "1",
+            role = ChatMessage.Role.ASSISTANT,
+            contentBlocks = listOf(ContentBlock.Text("hello")),
             isStreaming = true,
         )
-        val updated = msg.copy(content = "hello world", isStreaming = false)
+        val updated = msg.copy(
+            contentBlocks = listOf(ContentBlock.Text("hello world")),
+            isStreaming = false,
+        )
         assertEquals("1", updated.id)
         assertEquals(ChatMessage.Role.ASSISTANT, updated.role)
-        assertEquals("hello world", updated.content)
+        assertEquals("hello world", updated.textContent)
         assertFalse(updated.isStreaming)
+    }
+
+    @Test
+    fun `ofText creates message with single text block`() {
+        val msg = ChatMessage.ofText(id = "1", role = ChatMessage.Role.USER, text = "hello")
+        assertEquals(1, msg.contentBlocks.size)
+        assertTrue(msg.contentBlocks[0] is ContentBlock.Text)
+        assertEquals("hello", msg.textContent)
     }
 
     @Test
