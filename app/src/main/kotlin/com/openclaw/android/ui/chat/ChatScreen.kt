@@ -140,6 +140,7 @@ fun ChatScreen(viewModel: ChatViewModel = hiltViewModel()) {
                     items(messages, key = { it.id }) { message ->
                         MessageBubble(
                             message = message,
+                            fileBridge = viewModel.fileBridge,
                             onRetry = { viewModel.retryMessage(it) },
                             onDelete = { viewModel.deleteMessage(it) },
                         )

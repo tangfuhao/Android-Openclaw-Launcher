@@ -363,10 +363,69 @@ toolResult 消息字段：
 | 输入参数 | `data.input` | `data.args` |
 | 结果内容 | `data.content` / `data.output` | `data.meta` |
 
-### 8.3 防御策略
+### 8.3 用户消息中的 Transcript 前缀注入
+
+`chat.history` 返回的 `role: "user"` 消息内容可能被 Gateway 注入系统事件和时间戳前缀。这是 OpenClaw Transcript 归一化层的行为——它将系统通知（如命令执行结果）和消息时间戳直接拼接进消息正文。
+
+**实测示例**（2026-03）：
+
+用户发送：`用skills的方法，访问macaron.im 然后截图给我`
+
+`chat.history` 返回的 content：
+
+```json
+[{"type":"text","text":"System: [2026-03-02 10:32:52 UTC] Exec completed (gentle-b, code 1) :: Gateway service check failed: Error: systemctl --user unavailable: Failed to connect to bus: No medium found\n\n[Mon 2026-03-02 10:33 UTC] 用skills的方法，访问macaron.im 然后截图给我"}]
+```
+
+结构拆解：
+
+```
+┌─ System 事件注入 ─────────────────────────────────────────────────┐
+│ "System: [2026-03-02 10:32:52 UTC] Exec completed (gentle-b, code 1) :: ..." │
+├─ 空行分隔 ────────────────────────────────────────────────────────┤
+│ "\n\n"                                                           │
+├─ 时间戳前缀 + 用户原文 ──────────────────────────────────────────┤
+│ "[Mon 2026-03-02 10:33 UTC] 用skills的方法，访问macaron.im 然后截图给我"  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**观察到的时间戳格式**：
+
+| 格式 | 示例 | 出现场景 |
+|------|------|---------|
+| Day + ISO + TZ | `[Mon 2026-03-02 10:33 UTC]` | 用户消息时间戳 |
+| ISO + seconds + TZ | `[2026-03-02 10:32:52 UTC]` | 系统事件时间戳 |
+| ISO 8601 compact | `[2026-03-02T10:32:52Z]` | 可能的变体 |
+
+**Android App 处理**：`ChatApi.stripTranscriptPrefix()` 在解析 user 消息时剥离注入的前缀，通过正则匹配最后一个时间戳标记提取用户原文。兜底逻辑会丢弃以 `"System:"` 开头的行。
+
+### 8.4 多媒体内容块
+
+`toolResult` 消息的 `content` 数组中可能包含多媒体类型，实测确认的类型：
+
+```json
+// role: "toolResult" 的 content 数组
+[
+  {"type": "text", "text": "Read image file [image/png]"},
+  {"type": "image", "mimeType": "image/png", "omitted": true, "bytes": 357080}
+]
+```
+
+| type | 字段 | 说明 |
+|------|------|------|
+| `"image"` | `mimeType`, `omitted`, `bytes`, `data` | 图片。`omitted: true` 表示二进制数据被剥离，`bytes` 为原始大小，`data` 在未 omit 时为 base64 |
+| `"file"` | `mimeType`, `fileName`, `path`, `bytes` | 通用文件引用 |
+| `"audio"` | 同上 | 音频（预期格式，待实测确认） |
+| `"video"` | 同上 | 视频（预期格式，待实测确认） |
+
+**Android App 处理**：`parseContentBlocks()` 解析这些类型为 `ContentBlock.Image` / `ContentBlock.MediaRef`。对 `omitted` 图片，`inferProotPath()` 从关联工具调用的输入参数（`file_path`、`path` 等）推断 proot 文件路径，UI 层优先尝试本地加载，失败则显示占位卡片。
+
+### 8.5 防御策略
 
 由于消息体格式没有稳定契约，采用以下防御措施：
 
 1. **多字段 fallback 解析**：`toolCallId || toolId || id`、`args || input`、`meta || content || output`
-2. **本文档作为实测基准**：每次 OpenClaw 版本升级后对照验证
-3. **集成测试**：直接连接本地 Gateway 断言字段结构，纳入 CI
+2. **Transcript 前缀剥离**：`stripTranscriptPrefix()` 覆盖多种时间戳格式，兜底剥离 `System:` 行
+3. **Omitted 媒体本地推断**：`inferProotPath()` 从工具参数推断文件路径，降级为占位卡片
+4. **本文档作为实测基准**：每次 OpenClaw 版本升级后对照验证
+5. **集成测试**：直接连接本地 Gateway 断言字段结构，纳入 CI

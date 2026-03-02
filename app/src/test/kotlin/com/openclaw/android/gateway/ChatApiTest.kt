@@ -2,6 +2,7 @@ package com.openclaw.android.gateway
 
 import com.openclaw.android.data.ChatMessage
 import com.openclaw.android.data.ContentBlock
+import com.openclaw.android.data.ToolPhase
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -343,5 +344,182 @@ class ChatApiTest {
     fun `parseContentBlocks handles empty string`() {
         val blocks = chatApi.parseContentBlocks(JsonPrimitive(""))
         assertTrue(blocks.isEmpty())
+    }
+
+    @Test
+    fun `parseContentBlocks handles image type`() {
+        val content = buildJsonArray {
+            add(buildJsonObject {
+                put("type", "image")
+                put("mimeType", "image/png")
+                put("omitted", true)
+                put("bytes", 357080)
+            })
+        }
+        val blocks = chatApi.parseContentBlocks(content)
+        assertEquals(1, blocks.size)
+        val img = blocks[0] as ContentBlock.Image
+        assertEquals("image/png", img.mediaType)
+        assertTrue(img.omitted)
+        assertEquals(357080L, img.bytes)
+        assertEquals(null, img.source)
+    }
+
+    @Test
+    fun `parseContentBlocks handles image with data`() {
+        val content = buildJsonArray {
+            add(buildJsonObject {
+                put("type", "image")
+                put("mimeType", "image/jpeg")
+                put("data", "base64data")
+            })
+        }
+        val blocks = chatApi.parseContentBlocks(content)
+        assertEquals(1, blocks.size)
+        val img = blocks[0] as ContentBlock.Image
+        assertEquals("image/jpeg", img.mediaType)
+        assertEquals(false, img.omitted)
+        assertEquals("base64data", img.source)
+    }
+
+    @Test
+    fun `parseContentBlocks handles file type as MediaRef`() {
+        val content = buildJsonArray {
+            add(buildJsonObject {
+                put("type", "file")
+                put("mimeType", "application/pdf")
+                put("fileName", "report.pdf")
+                put("path", "/tmp/report.pdf")
+                put("bytes", 12345)
+            })
+        }
+        val blocks = chatApi.parseContentBlocks(content)
+        assertEquals(1, blocks.size)
+        val ref = blocks[0] as ContentBlock.MediaRef
+        assertEquals("/tmp/report.pdf", ref.prootPath)
+        assertEquals("application/pdf", ref.mimeType)
+        assertEquals("report.pdf", ref.fileName)
+        assertEquals(12345L, ref.size)
+    }
+
+    @Test
+    fun `getHistory extracts media blocks from toolResult into ToolActivity`() = runTest {
+        val payload = buildJsonObject {
+            putJsonArray("messages") {
+                add(buildJsonObject {
+                    put("role", "assistant")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject {
+                            put("type", "toolCall")
+                            put("id", "tc-img")
+                            put("name", "Read")
+                            put("arguments", buildJsonObject { put("file_path", "/tmp/screenshot.png") })
+                        })
+                    })
+                    put("timestamp", "1700000000")
+                })
+                add(buildJsonObject {
+                    put("role", "toolResult")
+                    put("toolCallId", "tc-img")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject { put("type", "text"); put("text", "Read image file [image/png]") })
+                        add(buildJsonObject {
+                            put("type", "image")
+                            put("mimeType", "image/png")
+                            put("omitted", true)
+                            put("bytes", 357080)
+                        })
+                    })
+                    put("timestamp", "1700000001")
+                })
+                add(buildJsonObject {
+                    put("role", "assistant")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject { put("type", "text"); put("text", "Here is the screenshot.") })
+                    })
+                    put("timestamp", "1700000002")
+                })
+            }
+        }
+        coEvery { gateway.request("chat.history", any()) } returns okResponse(payload)
+
+        val messages = chatApi.getHistory()
+        assertEquals(1, messages.size)
+        assertEquals(1, messages[0].toolActivities.size)
+
+        val activity = messages[0].toolActivities[0]
+        assertEquals("Read", activity.toolName)
+        assertEquals("tc-img", activity.toolId)
+        assertEquals(ToolPhase.COMPLETED, activity.phase)
+        assertTrue(activity.output?.contains("Read image file") == true)
+
+        // Media in ToolActivity
+        assertEquals(1, activity.mediaBlocks.size)
+        val img = activity.mediaBlocks[0] as ContentBlock.Image
+        assertEquals("image/png", img.mediaType)
+        assertTrue(img.omitted)
+        assertEquals(357080L, img.bytes)
+        assertEquals("/tmp/screenshot.png", img.prootPath)
+
+        // Media also promoted to message-level contentBlocks for direct visibility
+        val messageImages = messages[0].contentBlocks.filterIsInstance<ContentBlock.Image>()
+        assertEquals(1, messageImages.size)
+        assertEquals("/tmp/screenshot.png", messageImages[0].prootPath)
+    }
+
+    // --- stripTranscriptPrefix ---
+
+    @Test
+    fun `stripTranscriptPrefix removes system event and day-of-week timestamp`() {
+        val raw = "System: [2026-03-02 10:32:52 UTC] Exec completed (gentle-b, code 1) :: " +
+            "Gateway service check failed\n\n[Mon 2026-03-02 10:33 UTC] 用skills的方法"
+        assertEquals("用skills的方法", chatApi.stripTranscriptPrefix(raw))
+    }
+
+    @Test
+    fun `stripTranscriptPrefix removes ISO timestamp without day-of-week`() {
+        val raw = "[2026-03-02 10:32:52 UTC] hello world"
+        assertEquals("hello world", chatApi.stripTranscriptPrefix(raw))
+    }
+
+    @Test
+    fun `stripTranscriptPrefix removes ISO 8601 compact timestamp`() {
+        val raw = "[2026-03-02T10:32:52Z] hello"
+        assertEquals("hello", chatApi.stripTranscriptPrefix(raw))
+    }
+
+    @Test
+    fun `stripTranscriptPrefix uses last timestamp when multiple present`() {
+        val raw = "[2026-03-02 10:00 UTC] system stuff\n\n[Mon 2026-03-02 10:05 UTC] actual msg"
+        assertEquals("actual msg", chatApi.stripTranscriptPrefix(raw))
+    }
+
+    @Test
+    fun `stripTranscriptPrefix returns original text when no timestamp`() {
+        assertEquals("hello world", chatApi.stripTranscriptPrefix("hello world"))
+    }
+
+    @Test
+    fun `stripTranscriptPrefix strips System lines as fallback`() {
+        val raw = "System: something failed\n\nhello"
+        assertEquals("hello", chatApi.stripTranscriptPrefix(raw))
+    }
+
+    @Test
+    fun `stripTranscriptPrefix handles timestamp with seconds`() {
+        val raw = "[Tue 2026-05-15 14:30:45 CST] 你好"
+        assertEquals("你好", chatApi.stripTranscriptPrefix(raw))
+    }
+
+    @Test
+    fun `stripTranscriptPrefix handles ctime-style timestamp`() {
+        val raw = "[Mar  2 10:33:00 UTC 2026] test message"
+        assertEquals("test message", chatApi.stripTranscriptPrefix(raw))
+    }
+
+    @Test
+    fun `stripTranscriptPrefix preserves brackets in user text`() {
+        val raw = "[Mon 2026-03-02 10:33 UTC] tell me about [React]"
+        assertEquals("tell me about [React]", chatApi.stripTranscriptPrefix(raw))
     }
 }

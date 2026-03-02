@@ -27,17 +27,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil.compose.AsyncImage
+import java.io.File
 
 @Composable
 fun FullScreenImageViewer(
-    imageSource: String,
-    mediaType: String,
+    imageSource: Any,
     onDismiss: () -> Unit,
 ) {
-    val imageData = if (imageSource.startsWith("data:") || imageSource.startsWith("/")) {
-        imageSource
-    } else {
-        "data:$mediaType;base64,$imageSource"
+    val imageData = when (imageSource) {
+        is File -> imageSource
+        is String -> when {
+            imageSource.startsWith("data:") || imageSource.startsWith("/") -> imageSource
+            else -> "data:image/png;base64,$imageSource"
+        }
+        else -> imageSource
     }
 
     var scale by remember { mutableFloatStateOf(1f) }

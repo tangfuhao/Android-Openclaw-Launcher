@@ -25,11 +25,16 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AudioFile
+import androidx.compose.material.icons.filled.BrokenImage
 import androidx.compose.material.icons.filled.Build
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.InsertDriveFile
+import androidx.compose.material.icons.filled.VideoFile
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -50,12 +55,17 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
+import coil.compose.AsyncImage
+import coil.compose.AsyncImagePainter
 import com.openclaw.android.data.ChatMessage
 import com.openclaw.android.data.ContentBlock
 import com.openclaw.android.data.RunPhase
 import com.openclaw.android.data.ToolActivity
 import com.openclaw.android.data.ToolPhase
+import com.openclaw.android.proot.FileBridge
+import com.openclaw.android.ui.chat.media.FullScreenImageViewer
 import com.openclaw.android.ui.theme.*
+import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -64,6 +74,7 @@ import java.util.Locale
 @Composable
 fun MessageBubble(
     message: ChatMessage,
+    fileBridge: FileBridge? = null,
     onRetry: ((String) -> Unit)? = null,
     onDelete: ((String) -> Unit)? = null,
 ) {
@@ -71,6 +82,7 @@ fun MessageBubble(
     val isDark = isSystemInDarkTheme()
     val maxWidth = LocalConfiguration.current.screenWidthDp.dp * 0.85f
     var showMenu by remember { mutableStateOf(false) }
+    var fullScreenImage by remember { mutableStateOf<Any?>(null) }
 
     val bubbleColor = when {
         isUser && isDark -> DarkUserBubble
@@ -153,6 +165,19 @@ fun MessageBubble(
                                     )
                                 }
                             }
+                            is ContentBlock.Image -> {
+                                InlineImageCard(
+                                    block = block,
+                                    fileBridge = fileBridge,
+                                    onFullScreen = { source -> fullScreenImage = source },
+                                )
+                            }
+                            is ContentBlock.MediaRef -> {
+                                MediaRefCard(
+                                    block = block,
+                                    fileBridge = fileBridge,
+                                )
+                            }
                             else -> {}
                         }
                     }
@@ -162,6 +187,8 @@ fun MessageBubble(
                         AgentActivitySection(
                             activities = message.toolActivities,
                             runPhase = message.runPhase,
+                            fileBridge = fileBridge,
+                            onFullScreenImage = { source -> fullScreenImage = source },
                         )
                     }
 
@@ -194,6 +221,13 @@ fun MessageBubble(
             )
         }
     }
+
+    if (fullScreenImage != null) {
+        FullScreenImageViewer(
+            imageSource = fullScreenImage!!,
+            onDismiss = { fullScreenImage = null },
+        )
+    }
 }
 
 // ── Thinking Indicator ──────────────────────────────────────────────
@@ -224,6 +258,8 @@ private fun ThinkingIndicator() {
 private fun AgentActivitySection(
     activities: List<ToolActivity>,
     runPhase: RunPhase,
+    fileBridge: FileBridge? = null,
+    onFullScreenImage: ((Any) -> Unit)? = null,
 ) {
     var expanded by remember(runPhase) {
         mutableStateOf(runPhase != RunPhase.DONE)
@@ -312,6 +348,8 @@ private fun AgentActivitySection(
                         ToolActivityItem(
                             activity = activity,
                             showDetail = isLast && activity.phase == ToolPhase.RUNNING,
+                            fileBridge = fileBridge,
+                            onFullScreenImage = onFullScreenImage,
                         )
                     }
                 }
@@ -326,6 +364,8 @@ private fun AgentActivitySection(
 private fun ToolActivityItem(
     activity: ToolActivity,
     showDetail: Boolean,
+    fileBridge: FileBridge? = null,
+    onFullScreenImage: ((Any) -> Unit)? = null,
 ) {
     var detailExpanded by remember(activity.toolId, activity.phase) {
         mutableStateOf(showDetail)
@@ -413,6 +453,24 @@ private fun ToolActivityItem(
                         .fillMaxWidth()
                         .horizontalScroll(rememberScrollState()),
                 )
+            }
+
+            activity.mediaBlocks.forEach { block ->
+                when (block) {
+                    is ContentBlock.Image -> {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        InlineImageCard(
+                            block = block,
+                            fileBridge = fileBridge,
+                            onFullScreen = onFullScreenImage,
+                        )
+                    }
+                    is ContentBlock.MediaRef -> {
+                        Spacer(modifier = Modifier.height(4.dp))
+                        MediaRefCard(block = block, fileBridge = fileBridge)
+                    }
+                    else -> {}
+                }
             }
         }
     }
@@ -555,6 +613,197 @@ private fun ToolResultCard(
                 )
             }
         }
+    }
+}
+
+// ── Inline Image Card ──────────────────────────────────────────────
+
+@Composable
+private fun InlineImageCard(
+    block: ContentBlock.Image,
+    fileBridge: FileBridge?,
+    onFullScreen: ((Any) -> Unit)?,
+) {
+    val imageModel: Any? = remember(block) {
+        resolveImageModel(block, fileBridge)
+    }
+
+    if (imageModel != null) {
+        var loadFailed by remember { mutableStateOf(false) }
+
+        if (!loadFailed) {
+            AsyncImage(
+                model = imageModel,
+                contentDescription = "Image",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 200.dp)
+                    .padding(vertical = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onFullScreen?.invoke(imageModel) },
+                onState = { state ->
+                    if (state is AsyncImagePainter.State.Error) loadFailed = true
+                },
+            )
+        } else {
+            ImagePlaceholderCard(block)
+        }
+    } else {
+        ImagePlaceholderCard(block)
+    }
+}
+
+private fun resolveImageModel(block: ContentBlock.Image, fileBridge: FileBridge?): Any? {
+    if (!block.source.isNullOrBlank()) {
+        val src = block.source
+        return if (src.startsWith("/")) {
+            val hostFile = fileBridge?.getHostFile(src)
+            if (hostFile != null && hostFile.exists()) hostFile else null
+        } else {
+            "data:${block.mediaType};base64,$src"
+        }
+    }
+
+    if (block.omitted && block.prootPath != null && fileBridge != null) {
+        val hostFile = fileBridge.getHostFile(block.prootPath)
+        if (hostFile.exists()) return hostFile
+    }
+
+    return null
+}
+
+@Composable
+private fun ImagePlaceholderCard(block: ContentBlock.Image) {
+    val sizeLabel = block.bytes?.let { formatFileSize(it) } ?: ""
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        tonalElevation = 1.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(12.dp),
+        ) {
+            Icon(
+                Icons.Default.BrokenImage,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(modifier = Modifier.size(8.dp))
+            Column {
+                Text(
+                    text = "Image${if (sizeLabel.isNotEmpty()) " ($sizeLabel)" else ""}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (block.omitted) {
+                    Text(
+                        text = "Binary data omitted from history",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                    )
+                }
+            }
+        }
+    }
+}
+
+// ── Media Ref Card ─────────────────────────────────────────────────
+
+@Composable
+private fun MediaRefCard(
+    block: ContentBlock.MediaRef,
+    fileBridge: FileBridge?,
+) {
+    val hostFile = remember(block.prootPath) {
+        fileBridge?.getHostFile(block.prootPath)
+    }
+    val exists = hostFile?.exists() == true
+    val isAudio = fileBridge?.isAudio(block.mimeType) == true
+    val isVideo = fileBridge?.isVideo(block.mimeType) == true
+
+    when {
+        isAudio && exists -> {
+            AudioPlayerCard(
+                filePath = hostFile!!.absolutePath,
+                fileName = block.fileName,
+            )
+        }
+        isVideo && exists -> {
+            VideoPlayerCard(filePath = hostFile!!.absolutePath)
+        }
+        else -> {
+            FileRefCard(block = block, exists = exists)
+        }
+    }
+}
+
+@Composable
+private fun FileRefCard(
+    block: ContentBlock.MediaRef,
+    exists: Boolean,
+) {
+    val sizeLabel = block.size?.let { formatFileSize(it) } ?: ""
+    val icon = when {
+        block.mimeType.startsWith("audio/") -> Icons.Default.AudioFile
+        block.mimeType.startsWith("video/") -> Icons.Default.VideoFile
+        block.mimeType.startsWith("image/") -> Icons.Default.Image
+        else -> Icons.Default.InsertDriveFile
+    }
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        tonalElevation = 1.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.padding(12.dp),
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(24.dp),
+                tint = MaterialTheme.colorScheme.primary,
+            )
+            Spacer(modifier = Modifier.size(8.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = block.fileName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                val subtitle = buildString {
+                    if (sizeLabel.isNotEmpty()) append(sizeLabel)
+                    if (!exists) {
+                        if (isNotEmpty()) append(" · ")
+                        append("File not available locally")
+                    }
+                }
+                if (subtitle.isNotEmpty()) {
+                    Text(
+                        text = subtitle,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatFileSize(bytes: Long): String {
+    return when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        else -> String.format(Locale.US, "%.1f MB", bytes / (1024.0 * 1024.0))
     }
 }
 

@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.encodeToJsonElement
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
@@ -107,31 +108,41 @@ class ChatApi(private val gateway: GatewayClient) {
         for (msg in parsed) {
             when (msg.role) {
                 "user" -> {
+                    val cleanedBlocks = msg.blocks.map { block ->
+                        if (block is ContentBlock.Text) {
+                            ContentBlock.Text(stripTranscriptPrefix(block.text))
+                        } else block
+                    }
                     result.add(ChatMessage(
                         id = UUID.randomUUID().toString(),
                         role = ChatMessage.Role.USER,
-                        contentBlocks = msg.blocks,
+                        contentBlocks = cleanedBlocks,
                         timestamp = msg.timestamp,
                         sessionKey = sessionKey,
                     ))
                 }
                 "assistant" -> {
-                    val textBlocks = msg.blocks.filterIsInstance<ContentBlock.Text>()
+                    val textAndMediaBlocks = msg.blocks.filter {
+                        it is ContentBlock.Text || it is ContentBlock.Image || it is ContentBlock.MediaRef
+                    }
                     val toolCalls = msg.blocks.filterIsInstance<ContentBlock.ToolUse>()
 
                     if (toolCalls.isNotEmpty()) {
                         pendingToolUses.addAll(toolCalls)
                     }
 
-                    val hasTextContent = textBlocks.any { it.text.isNotBlank() }
+                    val hasTextContent = textAndMediaBlocks.any {
+                        it is ContentBlock.Text && it.text.isNotBlank()
+                    }
                     if (hasTextContent) {
                         val activities = buildToolActivities(pendingToolUses, pendingToolResults)
+                        val mediaFromTools = activities.flatMap { it.mediaBlocks }
                         val runPhase = if (activities.isNotEmpty()) RunPhase.DONE else RunPhase.IDLE
 
                         result.add(ChatMessage(
                             id = UUID.randomUUID().toString(),
                             role = ChatMessage.Role.ASSISTANT,
-                            contentBlocks = textBlocks,
+                            contentBlocks = textAndMediaBlocks + mediaFromTools,
                             toolActivities = activities,
                             runPhase = runPhase,
                             timestamp = msg.timestamp,
@@ -159,10 +170,11 @@ class ChatApi(private val gateway: GatewayClient) {
 
         if (pendingToolUses.isNotEmpty()) {
             val activities = buildToolActivities(pendingToolUses, pendingToolResults)
+            val mediaFromTools = activities.flatMap { it.mediaBlocks }
             result.add(ChatMessage(
                 id = UUID.randomUUID().toString(),
                 role = ChatMessage.Role.ASSISTANT,
-                contentBlocks = emptyList(),
+                contentBlocks = mediaFromTools,
                 toolActivities = activities,
                 runPhase = if (activities.isNotEmpty()) RunPhase.DONE else RunPhase.IDLE,
                 timestamp = System.currentTimeMillis(),
@@ -280,6 +292,35 @@ class ChatApi(private val gateway: GatewayClient) {
                             content = extractTextFromElement(obj["content"]),
                             isError = obj["is_error"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false,
                         )
+                        "image" -> {
+                            val mimeType = obj["mimeType"]?.jsonPrimitive?.content ?: "image/png"
+                            val omitted = obj["omitted"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+                            val bytes = obj["bytes"]?.jsonPrimitive?.content?.toLongOrNull()
+                            val data = obj["data"]?.jsonPrimitive?.content
+                            ContentBlock.Image(
+                                source = data,
+                                mediaType = mimeType,
+                                omitted = omitted,
+                                bytes = bytes,
+                            )
+                        }
+                        "file", "audio", "video" -> {
+                            val mimeType = obj["mimeType"]?.jsonPrimitive?.content ?: "application/octet-stream"
+                            val fileName = obj["fileName"]?.jsonPrimitive?.content
+                                ?: obj["name"]?.jsonPrimitive?.content
+                                ?: "file"
+                            val path = obj["path"]?.jsonPrimitive?.content
+                                ?: obj["filePath"]?.jsonPrimitive?.content
+                                ?: ""
+                            val size = obj["bytes"]?.jsonPrimitive?.content?.toLongOrNull()
+                                ?: obj["size"]?.jsonPrimitive?.content?.toLongOrNull()
+                            ContentBlock.MediaRef(
+                                prootPath = path,
+                                mimeType = mimeType,
+                                fileName = fileName,
+                                size = size,
+                            )
+                        }
                         "thinking" -> null
                         else -> null
                     }
@@ -321,6 +362,10 @@ class ChatApi(private val gateway: GatewayClient) {
             val resultText = result?.blocks
                 ?.filterIsInstance<ContentBlock.Text>()
                 ?.joinToString("\n") { it.text }
+            val mediaBlocks = result?.blocks
+                ?.filter { it is ContentBlock.Image || it is ContentBlock.MediaRef }
+                ?.map { block -> inferProotPath(block, use.input) }
+                ?: emptyList()
             ToolActivity(
                 toolId = use.toolId,
                 toolName = use.name,
@@ -332,8 +377,69 @@ class ChatApi(private val gateway: GatewayClient) {
                 input = use.input,
                 output = resultText?.take(4000),
                 isError = result?.isError ?: false,
+                mediaBlocks = mediaBlocks,
             )
         }
+    }
+
+    /**
+     * OpenClaw's transcript normalizes user messages by prepending system events
+     * and timestamps. Observed formats from runtime logs:
+     *
+     *   "System: [2026-03-02 10:32:52 UTC] Exec completed ...\n\n[Mon 2026-03-02 10:33 UTC] actual user text"
+     *
+     * Timestamp patterns seen:
+     *   [Mon 2026-03-02 10:33 UTC]         — day-of-week + ISO date + HH:MM + timezone
+     *   [2026-03-02 10:32:52 UTC]          — ISO date + HH:MM:SS + timezone (system events)
+     *   [2026-03-02T10:32:52Z]             — ISO 8601 compact
+     *   [Mon Mar  2 10:33:00 UTC 2026]     — ctime-style (potential)
+     *
+     * Strategy: find the last bracket-enclosed timestamp and return everything after it.
+     * Also strips leading "System: ..." lines if no timestamp match is found.
+     */
+    internal fun stripTranscriptPrefix(text: String): String {
+        val timestampRegex = Regex(
+            """\[""" +
+            """(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+)?""" +       // optional day-of-week
+            """(?:""" +
+            """\d{4}-\d{2}-\d{2}[\sT]\d{2}:\d{2}(?::\d{2})?""" + // ISO: 2026-03-02 10:33 or 2026-03-02T10:33:00
+            """|""" +
+            """(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2}\s+\d{2}:\d{2}(?::\d{2})?""" + // ctime: Mar  2 10:33:00
+            """)""" +
+            """(?:\s*[A-Z]{1,5})?""" +                            // optional timezone (UTC, CST, etc.)
+            """(?:\s+\d{4})?""" +                                 // optional trailing year (ctime)
+            """Z?""" +                                             // optional Z (ISO 8601)
+            """\]\s*"""
+        )
+
+        val lastMatch = timestampRegex.findAll(text).lastOrNull()
+        if (lastMatch != null) {
+            val extracted = text.substring(lastMatch.range.last + 1).trim()
+            if (extracted.isNotBlank()) return extracted
+        }
+
+        // Fallback: strip leading "System: ..." lines (e.g. exec notifications)
+        val lines = text.lines()
+        val userLines = lines.dropWhile { line ->
+            line.startsWith("System:") || line.isBlank()
+        }
+        val fallback = userLines.joinToString("\n").trim()
+        return fallback.ifBlank { text }
+    }
+
+    /**
+     * For omitted images, try to infer the proot filesystem path from tool call arguments.
+     * Scans common argument keys (file_path, path, filePath, filename) for absolute paths.
+     */
+    private fun inferProotPath(block: ContentBlock, toolInput: JsonObject): ContentBlock {
+        if (block !is ContentBlock.Image) return block
+        if (!block.omitted || block.prootPath != null) return block
+
+        val candidateKeys = listOf("file_path", "path", "filePath", "filename", "file")
+        val inferredPath = candidateKeys.firstNotNullOfOrNull { key ->
+            toolInput[key]?.jsonPrimitive?.content?.takeIf { it.startsWith("/") }
+        }
+        return if (inferredPath != null) block.copy(prootPath = inferredPath) else block
     }
 
     sealed interface ChatEvent {

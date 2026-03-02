@@ -19,6 +19,7 @@ data class ToolActivity(
     val output: String? = null,
     val isError: Boolean = false,
     val timestamp: Long = System.currentTimeMillis(),
+    val mediaBlocks: List<ContentBlock> = emptyList(),
 )
 
 @Serializable
@@ -97,17 +98,20 @@ sealed interface ContentBlock {
     ) : ContentBlock
 
     @Serializable
-    data class FileRef(
-        val path: String,
-        val mimeType: String? = null,
-        val fileName: String,
-        val size: Long? = null,
+    data class Image(
+        val source: String? = null,
+        val mediaType: String,
+        val omitted: Boolean = false,
+        val bytes: Long? = null,
+        val prootPath: String? = null,
     ) : ContentBlock
 
     @Serializable
-    data class Image(
-        val source: String,
-        val mediaType: String,
+    data class MediaRef(
+        val prootPath: String,
+        val mimeType: String,
+        val fileName: String,
+        val size: Long? = null,
     ) : ContentBlock
 
     @Serializable
