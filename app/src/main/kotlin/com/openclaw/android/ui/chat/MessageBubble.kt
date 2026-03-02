@@ -1,6 +1,9 @@
 package com.openclaw.android.ui.chat
 
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -14,13 +17,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Build
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Error
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
@@ -30,6 +36,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -37,6 +44,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
@@ -44,6 +52,9 @@ import androidx.compose.ui.unit.dp
 import com.mikepenz.markdown.m3.Markdown
 import com.openclaw.android.data.ChatMessage
 import com.openclaw.android.data.ContentBlock
+import com.openclaw.android.data.RunPhase
+import com.openclaw.android.data.ToolActivity
+import com.openclaw.android.data.ToolPhase
 import com.openclaw.android.ui.theme.*
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -81,6 +92,8 @@ fun MessageBubble(
         bottomEnd = if (isUser) 4.dp else 16.dp,
     )
 
+    val skipToolBlocksInContent = message.toolActivities.isNotEmpty()
+
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
@@ -98,6 +111,13 @@ fun MessageBubble(
                     ),
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
+
+                    // Thinking indicator (visible when THINKING and no text yet)
+                    if (message.runPhase == RunPhase.THINKING && message.textContent.isBlank()) {
+                        ThinkingIndicator()
+                    }
+
+                    // Content blocks (text, images, attachments — skip tool blocks if toolActivities present)
                     message.contentBlocks.forEach { block ->
                         when (block) {
                             is ContentBlock.Text -> {
@@ -117,23 +137,36 @@ fun MessageBubble(
                                 }
                             }
                             is ContentBlock.ToolUse -> {
-                                ToolUseCard(
-                                    toolName = block.name,
-                                    input = block.input.toString(),
-                                    isStreaming = message.isStreaming,
-                                )
+                                if (!skipToolBlocksInContent) {
+                                    ToolUseCard(
+                                        toolName = block.name,
+                                        input = block.input.toString(),
+                                        isStreaming = message.isStreaming,
+                                    )
+                                }
                             }
                             is ContentBlock.ToolResult -> {
-                                ToolResultCard(
-                                    content = block.content,
-                                    isError = block.isError,
-                                )
+                                if (!skipToolBlocksInContent) {
+                                    ToolResultCard(
+                                        content = block.content,
+                                        isError = block.isError,
+                                    )
+                                }
                             }
                             else -> {}
                         }
                     }
 
-                    if (message.isStreaming) {
+                    // Agent activity section (live tool execution)
+                    if (message.toolActivities.isNotEmpty()) {
+                        AgentActivitySection(
+                            activities = message.toolActivities,
+                            runPhase = message.runPhase,
+                        )
+                    }
+
+                    // Streaming indicator at bottom
+                    if (message.isStreaming && message.runPhase != RunPhase.THINKING) {
                         Spacer(modifier = Modifier.height(4.dp))
                         CircularProgressIndicator(
                             modifier = Modifier.size(12.dp),
@@ -162,6 +195,230 @@ fun MessageBubble(
         }
     }
 }
+
+// ── Thinking Indicator ──────────────────────────────────────────────
+
+@Composable
+private fun ThinkingIndicator() {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        modifier = Modifier.padding(vertical = 8.dp),
+    ) {
+        CircularProgressIndicator(
+            modifier = Modifier.size(16.dp),
+            strokeWidth = 2.dp,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Spacer(modifier = Modifier.size(8.dp))
+        Text(
+            text = "Thinking...",
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+// ── Agent Activity Section ──────────────────────────────────────────
+
+@Composable
+private fun AgentActivitySection(
+    activities: List<ToolActivity>,
+    runPhase: RunPhase,
+) {
+    var expanded by remember(runPhase) {
+        mutableStateOf(runPhase != RunPhase.DONE)
+    }
+
+    Surface(
+        shape = RoundedCornerShape(8.dp),
+        tonalElevation = 1.dp,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+    ) {
+        Column(modifier = Modifier.padding(8.dp)) {
+            // Header: summary + toggle
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = !expanded },
+            ) {
+                Icon(
+                    Icons.Default.Build,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(modifier = Modifier.size(6.dp))
+
+                val running = activities.count { it.phase == ToolPhase.RUNNING }
+                val headerText = when {
+                    runPhase == RunPhase.DONE -> {
+                        val count = activities.size
+                        "Used $count tool${if (count != 1) "s" else ""}"
+                    }
+                    running > 0 -> {
+                        val latest = activities.last { it.phase == ToolPhase.RUNNING }
+                        "Running: ${latest.toolName}"
+                    }
+                    else -> "Agent tools"
+                }
+
+                Text(
+                    text = headerText,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.weight(1f),
+                )
+
+                if (runPhase != RunPhase.DONE) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                    )
+                    Spacer(modifier = Modifier.size(4.dp))
+                }
+
+                Icon(
+                    if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(16.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // Expanded detail list with max height
+            AnimatedVisibility(
+                visible = expanded,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                val scrollState = rememberScrollState()
+
+                LaunchedEffect(activities.size) {
+                    scrollState.animateScrollTo(scrollState.maxValue)
+                }
+
+                Column(
+                    modifier = Modifier
+                        .heightIn(max = 200.dp)
+                        .verticalScroll(scrollState)
+                        .padding(top = 6.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    activities.forEachIndexed { index, activity ->
+                        val isLast = index == activities.lastIndex
+                        ToolActivityItem(
+                            activity = activity,
+                            showDetail = isLast && activity.phase == ToolPhase.RUNNING,
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ── Tool Activity Item ──────────────────────────────────────────────
+
+@Composable
+private fun ToolActivityItem(
+    activity: ToolActivity,
+    showDetail: Boolean,
+) {
+    var detailExpanded by remember(activity.toolId, activity.phase) {
+        mutableStateOf(showDetail)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(4.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerHighest.copy(alpha = 0.5f))
+            .clickable { detailExpanded = !detailExpanded }
+            .padding(6.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            // Status icon
+            when (activity.phase) {
+                ToolPhase.RUNNING, ToolPhase.PENDING -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(12.dp),
+                        strokeWidth = 1.5.dp,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                }
+                ToolPhase.COMPLETED -> {
+                    Icon(
+                        Icons.Default.CheckCircle,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        tint = Color(0xFF4CAF50),
+                    )
+                }
+                ToolPhase.ERROR -> {
+                    Icon(
+                        Icons.Default.Error,
+                        contentDescription = null,
+                        modifier = Modifier.size(12.dp),
+                        tint = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.size(6.dp))
+
+            Text(
+                text = activity.toolName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+
+            if (activity.phase == ToolPhase.COMPLETED || activity.phase == ToolPhase.ERROR) {
+                Icon(
+                    if (detailExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = null,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+
+        // Detail: input (for running) or output (for completed)
+        if (detailExpanded) {
+            val detailText = when {
+                activity.phase == ToolPhase.RUNNING && activity.input != null ->
+                    activity.input.toString().take(500)
+                activity.output != null ->
+                    activity.output.take(500)
+                else -> null
+            }
+
+            if (detailText != null) {
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = detailText,
+                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    color = if (activity.isError)
+                        MaterialTheme.colorScheme.error
+                    else
+                        MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 8,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .horizontalScroll(rememberScrollState()),
+                )
+            }
+        }
+    }
+}
+
+// ── Legacy tool cards (for historical messages without toolActivities) ───
 
 @Composable
 private fun ToolUseCard(

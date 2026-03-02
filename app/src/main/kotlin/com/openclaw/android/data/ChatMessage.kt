@@ -5,10 +5,29 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 
 @Serializable
+enum class RunPhase { IDLE, THINKING, TOOL_EXECUTING, RESPONDING, DONE }
+
+@Serializable
+enum class ToolPhase { PENDING, RUNNING, COMPLETED, ERROR }
+
+@Serializable
+data class ToolActivity(
+    val toolId: String,
+    val toolName: String,
+    val phase: ToolPhase,
+    val input: JsonObject? = null,
+    val output: String? = null,
+    val isError: Boolean = false,
+    val timestamp: Long = System.currentTimeMillis(),
+)
+
+@Serializable
 data class ChatMessage(
     val id: String,
     val role: Role,
     val contentBlocks: List<ContentBlock> = emptyList(),
+    val toolActivities: List<ToolActivity> = emptyList(),
+    val runPhase: RunPhase = RunPhase.IDLE,
     val timestamp: Long = System.currentTimeMillis(),
     val isStreaming: Boolean = false,
     val status: Status = Status.SENT,
@@ -18,6 +37,16 @@ data class ChatMessage(
     val textContent: String
         get() = contentBlocks.filterIsInstance<ContentBlock.Text>()
             .joinToString("\n") { it.text }
+
+    val hasActiveToolWork: Boolean
+        get() = toolActivities.isNotEmpty() && runPhase != RunPhase.DONE
+
+    val toolSummary: String
+        get() {
+            val count = toolActivities.size
+            val completed = toolActivities.count { it.phase == ToolPhase.COMPLETED }
+            return if (completed == count) "Used $count tools" else "$completed/$count tools completed"
+        }
 
     @Serializable
     enum class Role { USER, ASSISTANT, SYSTEM }

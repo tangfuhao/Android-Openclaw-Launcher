@@ -6,6 +6,9 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.openclaw.android.data.ChatMessage
 import com.openclaw.android.data.ContentBlock
+import com.openclaw.android.data.RunPhase
+import com.openclaw.android.data.ToolActivity
+import com.openclaw.android.data.ToolPhase
 import com.openclaw.android.gateway.ApprovalApi
 import com.openclaw.android.gateway.ChatApi
 import com.openclaw.android.gateway.ChatAttachment
@@ -57,10 +60,38 @@ class ChatViewModel @Inject constructor(
 
     private val runToMessageId = mutableMapOf<String, String>()
 
+    /**
+     * The id of an assistant placeholder message that has been added to the
+     * message list but not yet linked to a runId. This is set immediately when
+     * the user sends a message and cleared once the RPC returns or the first
+     * event claims it.
+     */
+    private var pendingPlaceholderId: String? = null
+
     init {
         observeChatEvents()
         observeApprovalRequests()
         observeAgentToolEvents()
+    }
+
+    // ── Mapping resolution ──────────────────────────────────────────
+
+    /**
+     * Resolves a runId to the corresponding assistant message id.
+     * If no mapping exists yet, attempts to claim the pending placeholder.
+     * Returns null if no matching message can be found.
+     */
+    private fun getOrClaimMessageId(runId: String): String? {
+        runToMessageId[runId]?.let { return it }
+
+        val pending = pendingPlaceholderId
+        if (pending != null) {
+            runToMessageId[runId] = pending
+            pendingPlaceholderId = null
+            return pending
+        }
+
+        return null
     }
 
     // ── Public API ──────────────────────────────────────────────────
@@ -73,23 +104,17 @@ class ChatViewModel @Inject constructor(
 
         val trimmed = text.trim()
 
-        // Client-only commands
         if (trimmed == "/clear") {
             _messages.value = emptyList()
             runToMessageId.clear()
+            pendingPlaceholderId = null
             return
         }
 
-        // Session lifecycle: mixed mode (WS method + clear UI)
         if (trimmed.matches(Regex("^/(reset|new)(\\s.*)?$"))) {
             resetSession()
             return
         }
-
-        // Everything else (including gateway-native / commands like /stop,
-        // /status, /help, /think, /model, /compact, /queue) goes through chat.send.
-        // Gateway's dispatchInboundMessage detects "/" prefixed commands and
-        // abort trigger words (/stop, stop, 停止, abort, etc.) automatically.
 
         val blocks = buildList {
             if (trimmed.isNotBlank()) add(ContentBlock.Text(trimmed))
@@ -102,7 +127,16 @@ class ChatViewModel @Inject constructor(
             status = ChatMessage.Status.SENDING,
         )
 
-        _messages.value = _messages.value + userMessage
+        val placeholderId = "assistant-${UUID.randomUUID()}"
+        val placeholder = ChatMessage(
+            id = placeholderId,
+            role = ChatMessage.Role.ASSISTANT,
+            runPhase = RunPhase.THINKING,
+            isStreaming = true,
+        )
+
+        _messages.value = _messages.value + userMessage + placeholder
+        pendingPlaceholderId = placeholderId
 
         viewModelScope.launch {
             try {
@@ -112,9 +146,26 @@ class ChatViewModel @Inject constructor(
                     attachments = attachments,
                 )
                 _activeRunId.value = runId
-                runToMessageId[runId] = runId
+
+                if (!runToMessageId.containsKey(runId)) {
+                    runToMessageId[runId] = placeholderId
+                    updateMessage(placeholderId) { it.copy(runId = runId) }
+                } else {
+                    // Events already claimed the placeholder or created their own message.
+                    // If the placeholder is still orphaned, remove it.
+                    if (pendingPlaceholderId == placeholderId) {
+                        _messages.value = _messages.value.filter { it.id != placeholderId }
+                    }
+                }
+
+                if (pendingPlaceholderId == placeholderId) {
+                    pendingPlaceholderId = null
+                }
+
                 updateMessage(userMessage.id) { it.copy(status = ChatMessage.Status.SENT) }
             } catch (e: Exception) {
+                _messages.value = _messages.value.filter { it.id != placeholderId }
+                if (pendingPlaceholderId == placeholderId) pendingPlaceholderId = null
                 updateMessage(userMessage.id) { it.copy(status = ChatMessage.Status.ERROR) }
             }
         }
@@ -127,6 +178,7 @@ class ChatViewModel @Inject constructor(
             } catch (_: Exception) {}
             _messages.value = emptyList()
             runToMessageId.clear()
+            pendingPlaceholderId = null
             _activeRunId.value = null
         }
     }
@@ -167,7 +219,16 @@ class ChatViewModel @Inject constructor(
                     ),
                     status = ChatMessage.Status.SENDING,
                 )
-                _messages.value = _messages.value + userMsg
+
+                val placeholderId = "assistant-${UUID.randomUUID()}"
+                val placeholder = ChatMessage(
+                    id = placeholderId,
+                    role = ChatMessage.Role.ASSISTANT,
+                    runPhase = RunPhase.THINKING,
+                    isStreaming = true,
+                )
+                _messages.value = _messages.value + userMsg + placeholder
+                pendingPlaceholderId = placeholderId
 
                 val runId = chatApi.sendMessage(
                     text = "[Sent image: ${bridged.fileName}]",
@@ -175,9 +236,16 @@ class ChatViewModel @Inject constructor(
                     attachments = listOf(attachment),
                 )
                 _activeRunId.value = runId
-                runToMessageId[runId] = runId
+                if (!runToMessageId.containsKey(runId)) {
+                    runToMessageId[runId] = placeholderId
+                    updateMessage(placeholderId) { it.copy(runId = runId) }
+                } else if (pendingPlaceholderId == placeholderId) {
+                    _messages.value = _messages.value.filter { it.id != placeholderId }
+                }
+                if (pendingPlaceholderId == placeholderId) pendingPlaceholderId = null
                 updateMessage(userMsg.id) { it.copy(status = ChatMessage.Status.SENT) }
             } catch (e: Exception) {
+                pendingPlaceholderId = null
                 val errMsg = ChatMessage.ofText(
                     id = UUID.randomUUID().toString(),
                     role = ChatMessage.Role.SYSTEM,
@@ -208,16 +276,32 @@ class ChatViewModel @Inject constructor(
                     ),
                     status = ChatMessage.Status.SENDING,
                 )
-                _messages.value = _messages.value + userMsg
+
+                val placeholderId = "assistant-${UUID.randomUUID()}"
+                val placeholder = ChatMessage(
+                    id = placeholderId,
+                    role = ChatMessage.Role.ASSISTANT,
+                    runPhase = RunPhase.THINKING,
+                    isStreaming = true,
+                )
+                _messages.value = _messages.value + userMsg + placeholder
+                pendingPlaceholderId = placeholderId
 
                 val runId = chatApi.sendMessage(
                     text = "I've shared a file at ${bridged.prootPath} (${bridged.fileName}, ${bridged.mimeType}). Please process it.",
                     sessionKey = SESSION_KEY,
                 )
                 _activeRunId.value = runId
-                runToMessageId[runId] = runId
+                if (!runToMessageId.containsKey(runId)) {
+                    runToMessageId[runId] = placeholderId
+                    updateMessage(placeholderId) { it.copy(runId = runId) }
+                } else if (pendingPlaceholderId == placeholderId) {
+                    _messages.value = _messages.value.filter { it.id != placeholderId }
+                }
+                if (pendingPlaceholderId == placeholderId) pendingPlaceholderId = null
                 updateMessage(userMsg.id) { it.copy(status = ChatMessage.Status.SENT) }
             } catch (e: Exception) {
+                pendingPlaceholderId = null
                 val errMsg = ChatMessage.ofText(
                     id = UUID.randomUUID().toString(),
                     role = ChatMessage.Role.SYSTEM,
@@ -252,16 +336,32 @@ class ChatViewModel @Inject constructor(
                     ),
                     status = ChatMessage.Status.SENDING,
                 )
-                _messages.value = _messages.value + userMsg
+
+                val placeholderId = "assistant-${UUID.randomUUID()}"
+                val placeholder = ChatMessage(
+                    id = placeholderId,
+                    role = ChatMessage.Role.ASSISTANT,
+                    runPhase = RunPhase.THINKING,
+                    isStreaming = true,
+                )
+                _messages.value = _messages.value + userMsg + placeholder
+                pendingPlaceholderId = placeholderId
 
                 val runId = chatApi.sendMessage(
                     text = "I've sent a voice message at ${bridged.prootPath}. Please transcribe and respond to it.",
                     sessionKey = SESSION_KEY,
                 )
                 _activeRunId.value = runId
-                runToMessageId[runId] = runId
+                if (!runToMessageId.containsKey(runId)) {
+                    runToMessageId[runId] = placeholderId
+                    updateMessage(placeholderId) { it.copy(runId = runId) }
+                } else if (pendingPlaceholderId == placeholderId) {
+                    _messages.value = _messages.value.filter { it.id != placeholderId }
+                }
+                if (pendingPlaceholderId == placeholderId) pendingPlaceholderId = null
                 updateMessage(userMsg.id) { it.copy(status = ChatMessage.Status.SENT) }
             } catch (e: Exception) {
+                pendingPlaceholderId = null
                 val errMsg = ChatMessage.ofText(
                     id = UUID.randomUUID().toString(),
                     role = ChatMessage.Role.SYSTEM,
@@ -324,27 +424,28 @@ class ChatViewModel @Inject constructor(
     }
 
     private fun handleDelta(event: ChatApi.ChatEvent.Delta) {
-        val runId = event.runId
-        val existingMsgId = runToMessageId[runId]
+        val msgId = getOrClaimMessageId(event.runId)
 
-        if (existingMsgId != null) {
-            val idx = _messages.value.indexOfFirst { it.id == existingMsgId }
-            if (idx >= 0) {
-                updateMessage(existingMsgId) {
-                    it.copy(contentBlocks = event.contentBlocks, isStreaming = true)
-                }
+        if (msgId != null) {
+            updateMessage(msgId) {
+                it.copy(
+                    contentBlocks = event.contentBlocks,
+                    runPhase = RunPhase.RESPONDING,
+                    isStreaming = true,
+                    runId = event.runId,
+                )
             }
         } else {
-            val msgId = "assistant-$runId"
-            runToMessageId[runId] = msgId
-            val streamingMsg = ChatMessage(
-                id = msgId,
+            val newId = "assistant-${event.runId}"
+            runToMessageId[event.runId] = newId
+            _messages.value = _messages.value + ChatMessage(
+                id = newId,
                 role = ChatMessage.Role.ASSISTANT,
                 contentBlocks = event.contentBlocks,
+                runPhase = RunPhase.RESPONDING,
                 isStreaming = true,
-                runId = runId,
+                runId = event.runId,
             )
-            _messages.value = _messages.value + streamingMsg
         }
     }
 
@@ -359,6 +460,7 @@ class ChatViewModel @Inject constructor(
                 updateMessage(existingMsgId) {
                     it.copy(
                         contentBlocks = event.contentBlocks ?: it.contentBlocks,
+                        runPhase = RunPhase.DONE,
                         isStreaming = false,
                     )
                 }
@@ -371,6 +473,7 @@ class ChatViewModel @Inject constructor(
                 id = "assistant-$runId",
                 role = ChatMessage.Role.ASSISTANT,
                 contentBlocks = event.contentBlocks,
+                runPhase = RunPhase.DONE,
                 isStreaming = false,
                 runId = runId,
             )
@@ -385,7 +488,11 @@ class ChatViewModel @Inject constructor(
 
         if (existingMsgId != null) {
             updateMessage(existingMsgId) {
-                it.copy(isStreaming = false, status = ChatMessage.Status.SENT)
+                it.copy(
+                    runPhase = RunPhase.DONE,
+                    isStreaming = false,
+                    status = ChatMessage.Status.SENT,
+                )
             }
         }
     }
@@ -402,6 +509,7 @@ class ChatViewModel @Inject constructor(
                     val errorBlock = ContentBlock.Text("[Error: ${event.errorMessage}]")
                     it.copy(
                         contentBlocks = it.contentBlocks + errorBlock,
+                        runPhase = RunPhase.DONE,
                         isStreaming = false,
                         status = ChatMessage.Status.ERROR,
                     )
@@ -439,35 +547,74 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+    /**
+     * Tool events write ONLY to [ChatMessage.toolActivities], never to contentBlocks.
+     * This avoids the delta-replaces-everything problem entirely.
+     */
     private fun handleToolStream(event: ChatApi.AgentToolEvent.ToolStream) {
-        val runId = event.runId
-        val msgId = runToMessageId[runId] ?: return
+        val msgId = getOrClaimMessageId(event.runId) ?: return
         val data = event.data?.jsonObject ?: return
 
-        val block: ContentBlock = when (event.phase) {
+        val toolId = data["toolCallId"]?.jsonPrimitive?.content
+            ?: data["toolId"]?.jsonPrimitive?.content
+            ?: data["id"]?.jsonPrimitive?.content
+            ?: UUID.randomUUID().toString()
+
+        when (event.phase) {
             "start", "invoke" -> {
-                ContentBlock.ToolUse(
-                    toolId = data["toolId"]?.jsonPrimitive?.content
-                        ?: data["id"]?.jsonPrimitive?.content ?: "",
-                    name = event.toolName ?: "unknown",
-                    input = data["input"]?.jsonObject ?: JsonObject(emptyMap()),
+                val input = data["args"]?.jsonObject ?: data["input"]?.jsonObject
+                val activity = ToolActivity(
+                    toolId = toolId,
+                    toolName = event.toolName ?: "unknown",
+                    phase = ToolPhase.RUNNING,
+                    input = input,
                 )
+                updateMessage(msgId) {
+                    val updated = it.toolActivities.toMutableList()
+                    val existingIdx = updated.indexOfFirst { a -> a.toolId == toolId }
+                    if (existingIdx >= 0) {
+                        updated[existingIdx] = activity
+                    } else {
+                        updated.add(activity)
+                    }
+                    it.copy(
+                        toolActivities = updated,
+                        runPhase = RunPhase.TOOL_EXECUTING,
+                        isStreaming = true,
+                        runId = event.runId,
+                    )
+                }
             }
             "result", "complete" -> {
-                val content = data["content"]?.jsonPrimitive?.content
+                val content = data["meta"]?.jsonPrimitive?.content
+                    ?: data["content"]?.jsonPrimitive?.content
                     ?: data["output"]?.jsonPrimitive?.content ?: ""
                 val isError = data["isError"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
-                ContentBlock.ToolResult(
-                    toolUseId = data["toolUseId"]?.jsonPrimitive?.content
-                        ?: data["toolId"]?.jsonPrimitive?.content ?: "",
-                    content = content,
-                    isError = isError,
-                )
-            }
-            else -> return
-        }
 
-        updateMessage(msgId) { it.copy(contentBlocks = it.contentBlocks + block) }
+                updateMessage(msgId) {
+                    val updated = it.toolActivities.toMutableList()
+                    val existingIdx = updated.indexOfFirst { a -> a.toolId == toolId }
+                    if (existingIdx >= 0) {
+                        updated[existingIdx] = updated[existingIdx].copy(
+                            phase = if (isError) ToolPhase.ERROR else ToolPhase.COMPLETED,
+                            output = content.take(4000),
+                            isError = isError,
+                        )
+                    } else {
+                        val name = event.toolName
+                            ?: data["name"]?.jsonPrimitive?.content ?: "unknown"
+                        updated.add(ToolActivity(
+                            toolId = toolId,
+                            toolName = name,
+                            phase = if (isError) ToolPhase.ERROR else ToolPhase.COMPLETED,
+                            output = content.take(4000),
+                            isError = isError,
+                        ))
+                    }
+                    it.copy(toolActivities = updated)
+                }
+            }
+        }
     }
 
     private fun updateMessage(id: String, transform: (ChatMessage) -> ChatMessage) {

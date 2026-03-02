@@ -67,7 +67,9 @@ fun ChatScreen(viewModel: ChatViewModel = hiltViewModel()) {
     val searchMatches = remember(messages, searchQuery) { searchMessages(messages, searchQuery) }
 
     val lastMessage = messages.lastOrNull()
-    val scrollTrigger = lastMessage?.let { "${it.id}-${it.textContent.length}" }
+    val scrollTrigger = lastMessage?.let {
+        "${it.id}-${it.textContent.length}-${it.toolActivities.size}-${it.runPhase}"
+    }
 
     LaunchedEffect(messages.size, scrollTrigger) {
         if (messages.isNotEmpty() && !searchVisible) {

@@ -148,20 +148,35 @@ class ChatApiTest {
     }
 
     @Test
-    fun `getHistory parses tool_use content blocks`() = runTest {
+    fun `getHistory merges toolCall and toolResult into toolActivities`() = runTest {
         val payload = buildJsonObject {
             putJsonArray("messages") {
                 add(buildJsonObject {
                     put("role", "assistant")
                     put("content", buildJsonArray {
                         add(buildJsonObject {
-                            put("type", "tool_use")
+                            put("type", "toolCall")
                             put("id", "tool1")
                             put("name", "bash")
-                            put("input", buildJsonObject { put("command", "ls") })
+                            put("arguments", buildJsonObject { put("command", "ls") })
                         })
                     })
                     put("timestamp", "1700000000")
+                })
+                add(buildJsonObject {
+                    put("role", "toolResult")
+                    put("toolCallId", "tool1")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject { put("type", "text"); put("text", "file.txt") })
+                    })
+                    put("timestamp", "1700000001")
+                })
+                add(buildJsonObject {
+                    put("role", "assistant")
+                    put("content", buildJsonArray {
+                        add(buildJsonObject { put("type", "text"); put("text", "Done") })
+                    })
+                    put("timestamp", "1700000002")
                 })
             }
         }
@@ -169,9 +184,9 @@ class ChatApiTest {
 
         val messages = chatApi.getHistory()
         assertEquals(1, messages.size)
-        val block = messages[0].contentBlocks[0]
-        assertTrue(block is ContentBlock.ToolUse)
-        assertEquals("bash", (block as ContentBlock.ToolUse).name)
+        assertEquals(1, messages[0].toolActivities.size)
+        assertEquals("bash", messages[0].toolActivities[0].toolName)
+        assertEquals("file.txt", messages[0].toolActivities[0].output)
     }
 
     @Test

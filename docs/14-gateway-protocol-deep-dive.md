@@ -67,23 +67,15 @@ chat.send 构建的 MsgContext 只有约 15 个字段，而 Telegram 通道构�
 
 **WebSocket 路径（chat.send）**：
 
-当 Agent 被调用时（`agentRunStarted=true`），Pi Agent Runtime 直接通过 WebSocket 广播原始的 `chat` event。content 是完整的 Claude API content blocks 数组：
+当 Agent 被调用时（`agentRunStarted=true`），Pi Agent Runtime 通过 WebSocket 广播 `chat` event 和 `agent` event。
 
-```json
-{
-  "state": "delta",
-  "message": {
-    "role": "assistant",
-    "content": [
-      {"type": "text", "text": "让我查看一下目录"},
-      {"type": "tool_use", "id": "tu_1", "name": "bash", "input": {"command": "ls -la"}},
-      {"type": "tool_result", "tool_use_id": "tu_1", "content": "total 48\ndrwxr-xr-x ..."}
-    ]
-  }
-}
-```
+**重要**：消息体格式是 OpenClaw Transcript 的归一化格式，**不是** Claude API 的原始格式。具体差异见第 8 节。
 
-客户端收到 tool_use（Agent 调用了什么工具）、tool_result（工具返回了什么原始输出），需要自行决定如何渲染。
+`chat` event (delta/final) 的 `message.content` 中，文本以 `{"type":"text"}` 块传递。工具调用过程通过独立的 `agent` event（`stream: "tool"`）实时推送。
+
+`chat.history` 返回的历史消息中，工具调用以 `{"type":"toolCall"}` 块存在于 assistant 消息的 content 数组中，工具结果是独立的 `role: "toolResult"` 消息。
+
+客户端需要自行解析这些结构并决定如何渲染。
 
 **Telegram 路径**：
 
@@ -99,10 +91,7 @@ Telegram 用户看到的是 Agent "消化"后的输出——"我查看了目录�
 
 **对 Android App 的含义**：
 
-当前 `MessageBubble` 只渲染 `textContent`（拼接所有 `ContentBlock.Text`），`ToolUse` 和 `ToolResult` 块虽然收到了但没有良好的 UI 呈现。两个改进方向：
-
-1. **Operator 视角**（推荐）：像 Claude Code CLI 那样，把 `tool_use` 渲染为可折叠的"正在执行: bash"卡片，`tool_result` 渲染为代码块。这利用了 WS 路径独有的工具可见性优势。
-2. **IM 视角**：只渲染 `final` 事件中的文本，忽略中间过程。体验更接近 Telegram，但丢失了工具执行的实时反馈。
+采用 **Operator 视角**：将工具调用渲染为可折叠的 `AgentActivitySection`（"Used N tools"），支持展开查看每个 tool 的名称、输入参数、执行结果。Live 执行和历史加载使用统一的 `ToolActivity` 数据模型和 UI 组件。
 
 ### 2.3 Session Key 计算
 
@@ -309,3 +298,75 @@ ExecApprovalRequestParams:       { id, command, commandArgv?, cwd?, ... }
 | `client-info.ts` | 客户端 ID/Mode/Caps 枚举 |
 
 来源：`https://github.com/openclaw/openclaw/tree/main/src/gateway/protocol/schema/`
+
+## 8. 消息体实测格式（Transcript 归一化层）
+
+### 8.1 两层协议与抽象泄漏
+
+Gateway 协议存在两个抽象层：
+
+| 层级 | 覆盖范围 | 是否有 schema | 稳定性 |
+|------|---------|-------------|--------|
+| Gateway 帧协议 | 帧格式、RPC、事件信封 | TypeBox schema（严格） | 稳定 |
+| 消息体内容格式 | tool 调用/结果的字段名和结构 | `Type.Unknown()`（不定义） | 无契约 |
+
+`AgentEventSchema.data` 和 `ChatEventSchema.message` 均为 `Type.Unknown()`，意味着协议层**故意不承诺**消息体的内部结构。
+
+Telegram 路径不受影响——ReplyDispatcher 将 Agent 输出过滤为纯文本后投递，Telegram Bot 不接触内部格式。WebSocket 路径（Android App）选择了 Operator 视角，必须直接消费这些无契约的内部格式。
+
+### 8.2 实测字段映射
+
+以下映射基于 adb logcat 实测（OpenClaw v1.x，2026-03），非 Claude API 原始格式：
+
+**chat.history 返回的历史消息**：
+
+```
+消息结构：扁平数组，每条消息有 role 字段
+├── role: "user"        → content: [{"type":"text", "text":"..."}]
+├── role: "assistant"   → content: [{"type":"thinking", ...}, {"type":"toolCall", ...}] 或 [{"type":"text", ...}]
+├── role: "toolResult"  → 独立消息，keys: [role, toolCallId, toolName, content, isError, timestamp]
+└── role: "assistant"   → content: [{"type":"text", "text":"最终回复"}]
+```
+
+toolCall 块字段：
+
+| 字段 | Claude API 格式 | OpenClaw Transcript 实际格式 |
+|------|----------------|---------------------------|
+| 类型标识 | `"type": "tool_use"` | `"type": "toolCall"` |
+| 工具 ID | `"id"` | `"id"` |
+| 工具名 | `"name"` | `"name"` |
+| 输入参数 | `"input": {}` | `"arguments": {}` |
+
+toolResult 消息字段：
+
+| 字段 | Claude API 格式 | OpenClaw Transcript 实际格式 |
+|------|----------------|---------------------------|
+| 存在形式 | 嵌入 assistant content 数组 | 独立消息 `role: "toolResult"` |
+| 关联 ID | `"tool_use_id"` | `"toolCallId"` |
+| 结果内容 | `"content"` (text/array) | `"content"` (array) |
+| 错误标记 | `"is_error"` | `"isError"` |
+
+**agent event（stream: "tool"）实时工具事件**：
+
+```json
+// start 阶段
+{"phase":"start", "name":"exec", "toolCallId":"call_function_xxx", "args":{...}}
+
+// result 阶段
+{"phase":"result", "name":"exec", "toolCallId":"call_function_xxx", "meta":"摘要文本", "isError":false}
+```
+
+| 字段 | 之前假设 | 实际值 |
+|------|---------|-------|
+| 工具名 | `data.toolName` | `data.name` |
+| 工具 ID | `data.toolId` / `data.id` | `data.toolCallId` |
+| 输入参数 | `data.input` | `data.args` |
+| 结果内容 | `data.content` / `data.output` | `data.meta` |
+
+### 8.3 防御策略
+
+由于消息体格式没有稳定契约，采用以下防御措施：
+
+1. **多字段 fallback 解析**：`toolCallId || toolId || id`、`args || input`、`meta || content || output`
+2. **本文档作为实测基准**：每次 OpenClaw 版本升级后对照验证
+3. **集成测试**：直接连接本地 Gateway 断言字段结构，纳入 CI

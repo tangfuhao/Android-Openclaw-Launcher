@@ -94,7 +94,7 @@ class ChatViewModelTest {
     // --- sendMessage ---
 
     @Test
-    fun `sendMessage adds user message to list`() = runTest {
+    fun `sendMessage adds user message and assistant placeholder`() = runTest {
         coEvery { gatewayClient.request("chat.send", any()) } returns GatewayResponse(
             id = "1", ok = true, payload = buildJsonObject { put("runId", "r1") },
         )
@@ -102,9 +102,10 @@ class ChatViewModelTest {
         viewModel.sendMessage("hello world")
         advanceUntilIdle()
 
-        assertEquals(1, viewModel.messages.value.size)
+        assertEquals(2, viewModel.messages.value.size)
         assertEquals("hello world", viewModel.messages.value[0].textContent)
         assertEquals(ChatMessage.Role.USER, viewModel.messages.value[0].role)
+        assertEquals(ChatMessage.Role.ASSISTANT, viewModel.messages.value[1].role)
     }
 
     @Test

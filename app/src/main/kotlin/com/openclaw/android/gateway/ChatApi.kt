@@ -2,6 +2,9 @@ package com.openclaw.android.gateway
 
 import com.openclaw.android.data.ChatMessage
 import com.openclaw.android.data.ContentBlock
+import com.openclaw.android.data.RunPhase
+import com.openclaw.android.data.ToolActivity
+import com.openclaw.android.data.ToolPhase
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.serialization.json.Json
@@ -80,28 +83,94 @@ class ChatApi(private val gateway: GatewayClient) {
             ?.jsonArray
             ?: return emptyList()
 
-        return messages.mapNotNull { element ->
+        val parsed = messages.mapNotNull { element ->
             try {
                 val obj = element.jsonObject
-                val role = when (obj["role"]?.jsonPrimitive?.content) {
-                    "user" -> ChatMessage.Role.USER
-                    "assistant" -> ChatMessage.Role.ASSISTANT
-                    else -> ChatMessage.Role.SYSTEM
-                }
+                val roleStr = obj["role"]?.jsonPrimitive?.content ?: "unknown"
                 val blocks = parseContentBlocks(obj["content"])
                 val timestamp = obj["timestamp"]?.jsonPrimitive?.content?.toLongOrNull()
                     ?: System.currentTimeMillis()
-                ChatMessage(
-                    id = UUID.randomUUID().toString(),
-                    role = role,
-                    contentBlocks = blocks,
-                    timestamp = timestamp,
-                    sessionKey = sessionKey,
-                )
+                val toolCallId = obj["toolCallId"]?.jsonPrimitive?.content
+                val toolNameField = obj["toolName"]?.jsonPrimitive?.content
+                val isError = obj["isError"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false
+
+                ParsedMsg(roleStr, blocks, timestamp, toolCallId, toolNameField, isError)
             } catch (_: Exception) {
                 null
             }
         }
+
+        val result = mutableListOf<ChatMessage>()
+        var pendingToolUses = mutableListOf<ContentBlock.ToolUse>()
+        var pendingToolResults = mutableMapOf<String, ParsedMsg>()
+
+        for (msg in parsed) {
+            when (msg.role) {
+                "user" -> {
+                    result.add(ChatMessage(
+                        id = UUID.randomUUID().toString(),
+                        role = ChatMessage.Role.USER,
+                        contentBlocks = msg.blocks,
+                        timestamp = msg.timestamp,
+                        sessionKey = sessionKey,
+                    ))
+                }
+                "assistant" -> {
+                    val textBlocks = msg.blocks.filterIsInstance<ContentBlock.Text>()
+                    val toolCalls = msg.blocks.filterIsInstance<ContentBlock.ToolUse>()
+
+                    if (toolCalls.isNotEmpty()) {
+                        pendingToolUses.addAll(toolCalls)
+                    }
+
+                    val hasTextContent = textBlocks.any { it.text.isNotBlank() }
+                    if (hasTextContent) {
+                        val activities = buildToolActivities(pendingToolUses, pendingToolResults)
+                        val runPhase = if (activities.isNotEmpty()) RunPhase.DONE else RunPhase.IDLE
+
+                        result.add(ChatMessage(
+                            id = UUID.randomUUID().toString(),
+                            role = ChatMessage.Role.ASSISTANT,
+                            contentBlocks = textBlocks,
+                            toolActivities = activities,
+                            runPhase = runPhase,
+                            timestamp = msg.timestamp,
+                            sessionKey = sessionKey,
+                        ))
+                        pendingToolUses = mutableListOf()
+                        pendingToolResults = mutableMapOf()
+                    }
+                }
+                "toolResult" -> {
+                    val toolCallId = msg.toolCallId ?: ""
+                    pendingToolResults[toolCallId] = msg
+                }
+                else -> {
+                    result.add(ChatMessage(
+                        id = UUID.randomUUID().toString(),
+                        role = ChatMessage.Role.SYSTEM,
+                        contentBlocks = msg.blocks,
+                        timestamp = msg.timestamp,
+                        sessionKey = sessionKey,
+                    ))
+                }
+            }
+        }
+
+        if (pendingToolUses.isNotEmpty()) {
+            val activities = buildToolActivities(pendingToolUses, pendingToolResults)
+            result.add(ChatMessage(
+                id = UUID.randomUUID().toString(),
+                role = ChatMessage.Role.ASSISTANT,
+                contentBlocks = emptyList(),
+                toolActivities = activities,
+                runPhase = if (activities.isNotEmpty()) RunPhase.DONE else RunPhase.IDLE,
+                timestamp = System.currentTimeMillis(),
+                sessionKey = sessionKey,
+            ))
+        }
+
+        return result
     }
 
     suspend fun inject(sessionKey: String = "main", message: String, label: String? = null) {
@@ -156,7 +225,7 @@ class ChatApi(private val gateway: GatewayClient) {
 
                 when (payload.stream) {
                     "tool" -> {
-                        val toolName = data?.get("toolName")?.jsonPrimitive?.content
+                        val toolName = data?.get("name")?.jsonPrimitive?.content
                         val phase = data?.get("phase")?.jsonPrimitive?.content
                         AgentToolEvent.ToolStream(
                             runId = runId,
@@ -201,11 +270,17 @@ class ChatApi(private val gateway: GatewayClient) {
                             name = obj["name"]?.jsonPrimitive?.content ?: "unknown",
                             input = obj["input"]?.jsonObject ?: kotlinx.serialization.json.JsonObject(emptyMap()),
                         )
+                        "toolCall" -> ContentBlock.ToolUse(
+                            toolId = obj["id"]?.jsonPrimitive?.content ?: "",
+                            name = obj["name"]?.jsonPrimitive?.content ?: "unknown",
+                            input = obj["arguments"]?.jsonObject ?: kotlinx.serialization.json.JsonObject(emptyMap()),
+                        )
                         "tool_result" -> ContentBlock.ToolResult(
                             toolUseId = obj["tool_use_id"]?.jsonPrimitive?.content ?: "",
                             content = extractTextFromElement(obj["content"]),
                             isError = obj["is_error"]?.jsonPrimitive?.content?.toBooleanStrictOrNull() ?: false,
                         )
+                        "thinking" -> null
                         else -> null
                     }
                 } catch (_: Exception) { null }
@@ -225,6 +300,40 @@ class ChatApi(private val gateway: GatewayClient) {
                 .joinToString("\n")
         } catch (_: Exception) {}
         return element.toString()
+    }
+
+    private data class ParsedMsg(
+        val role: String,
+        val blocks: List<ContentBlock>,
+        val timestamp: Long,
+        val toolCallId: String?,
+        val toolName: String?,
+        val isError: Boolean,
+    )
+
+    private fun buildToolActivities(
+        toolUses: List<ContentBlock.ToolUse>,
+        toolResults: Map<String, ParsedMsg>,
+    ): List<ToolActivity> {
+        if (toolUses.isEmpty()) return emptyList()
+        return toolUses.map { use ->
+            val result = toolResults[use.toolId]
+            val resultText = result?.blocks
+                ?.filterIsInstance<ContentBlock.Text>()
+                ?.joinToString("\n") { it.text }
+            ToolActivity(
+                toolId = use.toolId,
+                toolName = use.name,
+                phase = when {
+                    result?.isError == true -> ToolPhase.ERROR
+                    result != null -> ToolPhase.COMPLETED
+                    else -> ToolPhase.COMPLETED
+                },
+                input = use.input,
+                output = resultText?.take(4000),
+                isError = result?.isError ?: false,
+            )
+        }
     }
 
     sealed interface ChatEvent {
