@@ -48,10 +48,7 @@ fun FullScreenVideoPlayer(
     }
 
     Dialog(
-        onDismissRequest = {
-            player.release()
-            onDismiss()
-        },
+        onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false),
     ) {
         Box(
@@ -70,10 +67,7 @@ fun FullScreenVideoPlayer(
             )
 
             IconButton(
-                onClick = {
-                    player.release()
-                    onDismiss()
-                },
+                onClick = onDismiss,
                 modifier = Modifier
                     .align(Alignment.TopEnd)
                     .padding(16.dp),

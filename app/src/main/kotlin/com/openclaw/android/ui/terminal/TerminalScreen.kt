@@ -5,9 +5,14 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -20,26 +25,24 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.termux.view.TerminalView
 
-/**
- * Terminal tab providing direct shell access to the embedded Linux environment.
- * Wraps the real Termux TerminalView (PTY-backed) inside a Compose layout.
- */
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun TerminalScreen(viewModel: TerminalViewModel = hiltViewModel()) {
+fun TerminalScreen(
+    onBack: () -> Unit = {},
+    viewModel: TerminalViewModel = hiltViewModel(),
+) {
     val rootfsInstalled by viewModel.rootfsInstalled.collectAsStateWithLifecycle()
     val sessionTitle by viewModel.sessionTitle.collectAsStateWithLifecycle()
 
     Column(modifier = Modifier.fillMaxSize()) {
-        Surface(
-            tonalElevation = 2.dp,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                text = sessionTitle,
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            )
-        }
+        TopAppBar(
+            title = { Text(text = sessionTitle) },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+            },
+        )
 
         if (!rootfsInstalled) {
             Box(

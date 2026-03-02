@@ -1,5 +1,6 @@
 package com.openclaw.android.ui.settings
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -9,11 +10,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Key
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -21,14 +24,16 @@ import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -41,9 +46,15 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.openclaw.android.data.PreferencesManager.ApiProvider
 import com.openclaw.android.data.PreferencesManager.ModelOption
+import kotlinx.coroutines.delay
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
+fun SettingsScreen(
+    onBack: () -> Unit = {},
+    onNavigateToTerminal: () -> Unit = {},
+    viewModel: SettingsViewModel = hiltViewModel(),
+) {
     val processState by viewModel.processState.collectAsStateWithLifecycle()
     val backgroundEnabled by viewModel.backgroundEnabled.collectAsStateWithLifecycle()
     val apiKeys by viewModel.apiKeys.collectAsStateWithLifecycle()
@@ -54,20 +65,17 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
             .fillMaxSize()
             .verticalScroll(rememberScrollState()),
     ) {
-        Surface(
-            tonalElevation = 2.dp,
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            Text(
-                text = "Settings",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
-            )
-        }
+        TopAppBar(
+            title = { Text("Settings") },
+            navigationIcon = {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                }
+            },
+        )
 
-        Spacer(modifier = Modifier.height(16.dp))
+        Spacer(modifier = Modifier.height(8.dp))
 
-        // --- Gateway Status ---
         SectionHeader("Gateway")
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             ListItem(
@@ -87,11 +95,17 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
                     )
                 },
             )
+            HorizontalDivider()
+            ListItem(
+                headlineContent = { Text("Terminal") },
+                supportingContent = { Text("Open a Linux shell session") },
+                leadingContent = { Icon(Icons.Default.Terminal, contentDescription = null) },
+                modifier = Modifier.clickable(onClick = onNavigateToTerminal),
+            )
         }
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- Model Selection ---
         SectionHeader("Model")
         ModelSelector(
             selectedModel = selectedModel,
@@ -101,7 +115,6 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- API Providers ---
         SectionHeader("API Providers")
 
         ApiProvider.entries.forEachIndexed { index, provider ->
@@ -115,7 +128,6 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- Storage ---
         SectionHeader("Storage")
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             ListItem(
@@ -127,7 +139,6 @@ fun SettingsScreen(viewModel: SettingsViewModel = hiltViewModel()) {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // --- About ---
         SectionHeader("About")
         Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
             ListItem(
@@ -227,6 +238,15 @@ private fun ProviderCard(
     onSave: (apiKey: String) -> Unit,
 ) {
     var localKey by remember(apiKey) { mutableStateOf(apiKey) }
+    var pendingSave by remember { mutableStateOf(false) }
+
+    LaunchedEffect(localKey) {
+        if (localKey == apiKey) return@LaunchedEffect
+        pendingSave = true
+        delay(600)
+        pendingSave = false
+        onSave(localKey)
+    }
 
     Card(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -235,10 +255,7 @@ private fun ProviderCard(
 
             OutlinedTextField(
                 value = localKey,
-                onValueChange = {
-                    localKey = it
-                    onSave(it)
-                },
+                onValueChange = { localKey = it },
                 label = { Text("API Key") },
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,

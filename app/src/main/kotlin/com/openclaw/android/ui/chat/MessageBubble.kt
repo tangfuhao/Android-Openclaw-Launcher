@@ -23,7 +23,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AudioFile
 import androidx.compose.material.icons.filled.BrokenImage
@@ -79,36 +78,69 @@ fun MessageBubble(
     onDelete: ((String) -> Unit)? = null,
 ) {
     val isUser = message.role == ChatMessage.Role.USER
-    val isDark = isSystemInDarkTheme()
-    val maxWidth = LocalConfiguration.current.screenWidthDp.dp * 0.85f
     var showMenu by remember { mutableStateOf(false) }
     var fullScreenImage by remember { mutableStateOf<Any?>(null) }
 
-    val bubbleColor = when {
-        isUser && isDark -> DarkUserBubble
-        isUser -> UserBubble
-        isDark -> DarkAssistantBubble
-        else -> AssistantBubble
+    val skipToolBlocksInContent = message.toolActivities.isNotEmpty()
+
+    if (isUser) {
+        UserMessageBubble(
+            message = message,
+            onLongClick = { showMenu = true },
+            onRetry = onRetry,
+            onDelete = onDelete,
+            showMenu = showMenu,
+            onDismissMenu = { showMenu = false },
+            fileBridge = fileBridge,
+            onFullScreenImage = { fullScreenImage = it },
+        )
+    } else {
+        AssistantMessageLayout(
+            message = message,
+            skipToolBlocksInContent = skipToolBlocksInContent,
+            fileBridge = fileBridge,
+            onFullScreenImage = { fullScreenImage = it },
+            onLongClick = { showMenu = true },
+            showMenu = showMenu,
+            onDismissMenu = { showMenu = false },
+            onRetry = onRetry,
+            onDelete = onDelete,
+        )
     }
-    val textColor = when {
-        isUser && isDark -> DarkUserBubbleText
-        isUser -> UserBubbleText
-        isDark -> DarkAssistantBubbleText
-        else -> AssistantBubbleText
+
+    if (fullScreenImage != null) {
+        FullScreenImageViewer(
+            imageSource = fullScreenImage!!,
+            onDismiss = { fullScreenImage = null },
+        )
     }
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun UserMessageBubble(
+    message: ChatMessage,
+    onLongClick: () -> Unit,
+    onRetry: ((String) -> Unit)?,
+    onDelete: ((String) -> Unit)?,
+    showMenu: Boolean,
+    onDismissMenu: () -> Unit,
+    fileBridge: FileBridge?,
+    onFullScreenImage: (Any) -> Unit,
+) {
+    val isDark = isSystemInDarkTheme()
+    val maxWidth = LocalConfiguration.current.screenWidthDp.dp * 0.80f
+    val bubbleColor = if (isDark) DarkUserBubble else UserBubble
+    val textColor = if (isDark) DarkUserBubbleText else UserBubbleText
 
     val bubbleShape = RoundedCornerShape(
-        topStart = 16.dp,
-        topEnd = 16.dp,
-        bottomStart = if (isUser) 16.dp else 4.dp,
-        bottomEnd = if (isUser) 4.dp else 16.dp,
+        topStart = 16.dp, topEnd = 16.dp,
+        bottomStart = 16.dp, bottomEnd = 4.dp,
     )
-
-    val skipToolBlocksInContent = message.toolActivities.isNotEmpty()
 
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
+        horizontalArrangement = Arrangement.End,
     ) {
         Box {
             Surface(
@@ -117,91 +149,25 @@ fun MessageBubble(
                 modifier = Modifier
                     .widthIn(max = maxWidth)
                     .animateContentSize()
-                    .combinedClickable(
-                        onClick = {},
-                        onLongClick = { showMenu = true },
-                    ),
+                    .combinedClickable(onClick = {}, onLongClick = onLongClick),
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
-
-                    // Thinking indicator (visible when THINKING and no text yet)
-                    if (message.runPhase == RunPhase.THINKING && message.textContent.isBlank()) {
-                        ThinkingIndicator()
-                    }
-
-                    // Content blocks (text, images, attachments — skip tool blocks if toolActivities present)
                     message.contentBlocks.forEach { block ->
                         when (block) {
                             is ContentBlock.Text -> {
                                 if (block.text.isNotBlank()) {
-                                    if (isUser) {
-                                        Text(
-                                            text = block.text,
-                                            color = textColor,
-                                            style = MaterialTheme.typography.bodyLarge,
-                                        )
-                                    } else {
-                                        Markdown(
-                                            content = block.text,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                    }
-                                }
-                            }
-                            is ContentBlock.ToolUse -> {
-                                if (!skipToolBlocksInContent) {
-                                    ToolUseCard(
-                                        toolName = block.name,
-                                        input = block.input.toString(),
-                                        isStreaming = message.isStreaming,
+                                    Text(
+                                        text = block.text,
+                                        color = textColor,
+                                        style = MaterialTheme.typography.bodyLarge,
                                     )
                                 }
                             }
-                            is ContentBlock.ToolResult -> {
-                                if (!skipToolBlocksInContent) {
-                                    ToolResultCard(
-                                        content = block.content,
-                                        isError = block.isError,
-                                    )
-                                }
-                            }
-                            is ContentBlock.Image -> {
-                                InlineImageCard(
-                                    block = block,
-                                    fileBridge = fileBridge,
-                                    onFullScreen = { source -> fullScreenImage = source },
-                                )
-                            }
-                            is ContentBlock.MediaRef -> {
-                                MediaRefCard(
-                                    block = block,
-                                    fileBridge = fileBridge,
-                                )
-                            }
+                            is ContentBlock.Image -> InlineImageCard(block, fileBridge) { onFullScreenImage(it) }
+                            is ContentBlock.MediaRef -> MediaRefCard(block, fileBridge)
                             else -> {}
                         }
                     }
-
-                    // Agent activity section (live tool execution)
-                    if (message.toolActivities.isNotEmpty()) {
-                        AgentActivitySection(
-                            activities = message.toolActivities,
-                            runPhase = message.runPhase,
-                            fileBridge = fileBridge,
-                            onFullScreenImage = { source -> fullScreenImage = source },
-                        )
-                    }
-
-                    // Streaming indicator at bottom
-                    if (message.isStreaming && message.runPhase != RunPhase.THINKING) {
-                        Spacer(modifier = Modifier.height(4.dp))
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            strokeWidth = 1.5.dp,
-                            color = textColor.copy(alpha = 0.6f),
-                        )
-                    }
-
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
                         text = formatTimestamp(message.timestamp),
@@ -211,21 +177,107 @@ fun MessageBubble(
                     )
                 }
             }
-
             MessageContextMenu(
                 expanded = showMenu,
                 message = message,
-                onDismiss = { showMenu = false },
+                onDismiss = onDismissMenu,
                 onRetry = onRetry,
                 onDelete = onDelete,
             )
         }
     }
+}
 
-    if (fullScreenImage != null) {
-        FullScreenImageViewer(
-            imageSource = fullScreenImage!!,
-            onDismiss = { fullScreenImage = null },
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun AssistantMessageLayout(
+    message: ChatMessage,
+    skipToolBlocksInContent: Boolean,
+    fileBridge: FileBridge?,
+    onFullScreenImage: (Any) -> Unit,
+    onLongClick: () -> Unit,
+    showMenu: Boolean,
+    onDismissMenu: () -> Unit,
+    onRetry: ((String) -> Unit)?,
+    onDelete: ((String) -> Unit)?,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(onClick = {}, onLongClick = onLongClick),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 4.dp),
+        ) {
+            if (message.runPhase == RunPhase.THINKING && message.textContent.isBlank()) {
+                ThinkingIndicator()
+            }
+
+            message.contentBlocks.forEach { block ->
+                when (block) {
+                    is ContentBlock.Text -> {
+                        if (block.text.isNotBlank()) {
+                            Markdown(
+                                content = block.text,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        }
+                    }
+                    is ContentBlock.ToolUse -> {
+                        if (!skipToolBlocksInContent) {
+                            ToolUseCard(
+                                toolName = block.name,
+                                input = block.input.toString(),
+                                isStreaming = message.isStreaming,
+                            )
+                        }
+                    }
+                    is ContentBlock.ToolResult -> {
+                        if (!skipToolBlocksInContent) {
+                            ToolResultCard(content = block.content, isError = block.isError)
+                        }
+                    }
+                    is ContentBlock.Image -> InlineImageCard(block, fileBridge) { onFullScreenImage(it) }
+                    is ContentBlock.MediaRef -> MediaRefCard(block, fileBridge)
+                    else -> {}
+                }
+            }
+
+            if (message.toolActivities.isNotEmpty()) {
+                Spacer(modifier = Modifier.height(4.dp))
+                AgentActivitySection(
+                    activities = message.toolActivities,
+                    runPhase = message.runPhase,
+                    fileBridge = fileBridge,
+                    onFullScreenImage = onFullScreenImage,
+                )
+            }
+
+            if (message.isStreaming && message.runPhase != RunPhase.THINKING) {
+                Spacer(modifier = Modifier.height(4.dp))
+                CircularProgressIndicator(
+                    modifier = Modifier.size(12.dp),
+                    strokeWidth = 1.5.dp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                )
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = formatTimestamp(message.timestamp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
+                style = MaterialTheme.typography.labelSmall,
+            )
+        }
+
+        MessageContextMenu(
+            expanded = showMenu,
+            message = message,
+            onDismiss = onDismissMenu,
+            onRetry = onRetry,
+            onDelete = onDelete,
         )
     }
 }
@@ -273,7 +325,6 @@ private fun AgentActivitySection(
             .padding(vertical = 4.dp),
     ) {
         Column(modifier = Modifier.padding(8.dp)) {
-            // Header: summary + toggle
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
@@ -324,23 +375,13 @@ private fun AgentActivitySection(
                 )
             }
 
-            // Expanded detail list with max height
             AnimatedVisibility(
                 visible = expanded,
                 enter = fadeIn(),
                 exit = fadeOut(),
             ) {
-                val scrollState = rememberScrollState()
-
-                LaunchedEffect(activities.size) {
-                    scrollState.animateScrollTo(scrollState.maxValue)
-                }
-
                 Column(
-                    modifier = Modifier
-                        .heightIn(max = 200.dp)
-                        .verticalScroll(scrollState)
-                        .padding(top = 6.dp),
+                    modifier = Modifier.padding(top = 6.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     activities.forEachIndexed { index, activity ->

@@ -10,6 +10,7 @@ import com.openclaw.android.gateway.GatewayClient
 import com.openclaw.android.gateway.GatewayResponse
 import com.openclaw.android.gateway.GatewayState
 import com.openclaw.android.proot.FileBridge
+import com.openclaw.android.service.ProcessManager
 import io.mockk.coEvery
 import io.mockk.every
 import io.mockk.mockk
@@ -39,8 +40,10 @@ class ChatViewModelTest {
     private val testDispatcher = StandardTestDispatcher()
 
     private lateinit var gatewayClient: GatewayClient
+    private lateinit var processManager: ProcessManager
     private lateinit var fileBridge: FileBridge
     private lateinit var connectionStateFlow: MutableStateFlow<GatewayState>
+    private lateinit var processStateFlow: MutableStateFlow<ProcessManager.ProcessState>
     private lateinit var chatEventsFlow: MutableSharedFlow<ChatEventPayload>
     private lateinit var approvalRequestsFlow: MutableSharedFlow<ApprovalRequestPayload>
     private lateinit var agentEventsFlow: MutableSharedFlow<AgentEventPayload>
@@ -52,8 +55,10 @@ class ChatViewModelTest {
         Dispatchers.setMain(testDispatcher)
 
         gatewayClient = mockk(relaxed = true)
+        processManager = mockk(relaxed = true)
         fileBridge = mockk(relaxed = true)
         connectionStateFlow = MutableStateFlow(GatewayState.Idle)
+        processStateFlow = MutableStateFlow(ProcessManager.ProcessState.Stopped)
         chatEventsFlow = MutableSharedFlow()
         approvalRequestsFlow = MutableSharedFlow()
         agentEventsFlow = MutableSharedFlow()
@@ -62,8 +67,9 @@ class ChatViewModelTest {
         every { gatewayClient.chatEvents } returns chatEventsFlow
         every { gatewayClient.approvalRequests } returns approvalRequestsFlow
         every { gatewayClient.agentEvents } returns agentEventsFlow
+        every { processManager.processState } returns processStateFlow
 
-        viewModel = ChatViewModel(gatewayClient, fileBridge)
+        viewModel = ChatViewModel(gatewayClient, processManager, fileBridge)
     }
 
     @After

@@ -24,11 +24,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import kotlinx.coroutines.delay
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -70,12 +72,26 @@ fun AudioPlayerCard(filePath: String, fileName: String) {
                     player.seekTo(0)
                     player.pause()
                 }
+                if (state == Player.STATE_READY && durationText.isBlank()) {
+                    durationText = formatDuration(player.duration)
+                }
             }
         }
         player.addListener(listener)
         onDispose {
             player.removeListener(listener)
             player.release()
+        }
+    }
+
+    LaunchedEffect(isPlaying) {
+        while (isPlaying) {
+            val duration = player.duration
+            if (duration > 0) {
+                progress = player.currentPosition.toFloat() / duration.toFloat()
+                durationText = formatDuration(duration)
+            }
+            delay(250)
         }
     }
 

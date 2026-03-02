@@ -16,6 +16,7 @@ import com.openclaw.android.gateway.GatewayClient
 import com.openclaw.android.gateway.GatewayState
 import com.openclaw.android.gateway.SessionApi
 import com.openclaw.android.proot.FileBridge
+import com.openclaw.android.service.ProcessManager
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -32,6 +33,7 @@ import javax.inject.Inject
 @HiltViewModel
 class ChatViewModel @Inject constructor(
     private val gatewayClient: GatewayClient,
+    private val processManager: ProcessManager,
     val fileBridge: FileBridge,
 ) : ViewModel() {
 
@@ -45,6 +47,9 @@ class ChatViewModel @Inject constructor(
 
     val connectionState: StateFlow<GatewayState> = gatewayClient.connectionState
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), GatewayState.Idle)
+
+    val processState: StateFlow<ProcessManager.ProcessState> = processManager.processState
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ProcessManager.ProcessState.Stopped)
 
     private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
