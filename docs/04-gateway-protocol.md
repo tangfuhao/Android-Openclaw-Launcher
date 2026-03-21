@@ -109,6 +109,8 @@ Client                                   Gateway
 | 方法 | 参数 | 返回 | 说明 |
 |------|------|------|------|
 | `chat.send` | `{message, sessionKey, idempotencyKey, thinking?, attachments?}` | `{runId, status}` | 发送用户消息 |
+
+> 当前 Android 前端只使用 `chat.send` 的**文本子集**：发送 `message + sessionKey + idempotencyKey`，不再暴露附件/语音等 UI 能力。
 | `chat.history` | `{sessionKey, limit?}` | `{messages: [...]}` | 获取历史消息 |
 | `chat.abort` | `{sessionKey, runId?}` | - | 中止当前 run（内部 API） |
 | `chat.inject` | `{sessionKey, message, label?}` | - | 注入系统消息到 transcript |

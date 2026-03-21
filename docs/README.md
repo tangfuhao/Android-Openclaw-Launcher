@@ -11,7 +11,7 @@
 | **02** | [内嵌 Linux 环境](02-bootstrap-linux-environment.md) | proot + Debian rootfs 安装/配置/验证流程 | 理解核心机制时阅读 |
 | **03** | [服务与进程生命周期](03-service-process-lifecycle.md) | Foreground Service、进程管理、健康检查 | 理解后台运行时阅读 |
 | **04** | [Gateway WebSocket 协议](04-gateway-protocol.md) | 协议 v3 帧格式、握手、方法、事件 | 对接 OpenClaw 时阅读 |
-| **05** | [UI 架构与状态管理](05-ui-architecture.md) | Compose 导航、ViewModel、消息气泡设计 | 开发 UI 时阅读 |
+| **05** | [UI 架构与状态管理](05-ui-architecture.md) | Compose 导航、极简文本聊天、审批弹窗 | 开发 UI 时阅读 |
 | **06** | [依赖注入](06-dependency-injection.md) | Hilt 配置、依赖图、扩展指南 | 添加新组件时阅读 |
 | **07** | [数据流与通信链路](07-data-flow.md) | 五条核心链路的详细数据流跟踪 | 调试问题时阅读 |
 | **08** | [终端集成](08-terminal-integration.md) | Termux 库嵌入、PTY 会话、Compose 集成 | 修改终端功能时阅读 |

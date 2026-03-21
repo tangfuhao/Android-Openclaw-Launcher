@@ -180,18 +180,9 @@ data class ChatSendParams(
     val message: String,
     val sessionKey: String = "main",
     val idempotencyKey: String,
-    val attachments: List<ChatAttachment>? = null,
     val thinking: String? = null,
     val deliver: Boolean? = null,
     val timeoutMs: Int? = null,
-)
-
-@Serializable
-data class ChatAttachment(
-    val type: String? = null,
-    val mimeType: String? = null,
-    val fileName: String? = null,
-    val content: String? = null,
 )
 
 @Serializable

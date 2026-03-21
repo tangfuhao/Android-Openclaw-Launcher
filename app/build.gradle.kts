@@ -60,6 +60,7 @@ android {
         }
     }
 
+
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -102,17 +103,8 @@ dependencies {
     implementation(libs.commons.compress)
     implementation(libs.xz)
 
-    // Image loading
-    implementation(libs.coil.compose)
-
     // Markdown rendering
     implementation(libs.markdown.renderer.m3)
-    implementation(libs.markdown.renderer.coil2)
-
-    // Media playback
-    implementation(libs.media3.exoplayer)
-    implementation(libs.media3.ui)
-    implementation(libs.media3.session)
 
     // Termux terminal components
     implementation(libs.termux.terminal.view)

@@ -4,7 +4,6 @@ import android.content.Context
 import com.openclaw.android.core.OpenClawConstants
 import com.openclaw.android.data.PreferencesManager
 import com.openclaw.android.gateway.GatewayClient
-import com.openclaw.android.proot.FileBridge
 import com.openclaw.android.proot.FileDownloader
 import com.openclaw.android.proot.OpenClawConfigWriter
 import com.openclaw.android.proot.ProotExecutor
@@ -92,15 +91,6 @@ object AppModule {
         configWriter: OpenClawConfigWriter,
     ): ProcessManager {
         return ProcessManager(context, paths, prootExecutor, configWriter)
-    }
-
-    @Provides
-    @Singleton
-    fun provideFileBridge(
-        @ApplicationContext context: Context,
-        paths: OpenClawConstants.Paths,
-    ): FileBridge {
-        return FileBridge(context, paths)
     }
 
     @Provides

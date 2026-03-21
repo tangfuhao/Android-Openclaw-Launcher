@@ -2,7 +2,7 @@
 
 ## 概述
 
-UI 层使用 Jetpack Compose + Material 3 构建，遵循单 Activity + Navigation Compose 架构。所有状态通过 Kotlin StateFlow/SharedFlow 从 ViewModel 单向传递到 Composable。
+UI 层使用 Jetpack Compose + Material 3 构建，遵循单 Activity + Navigation Compose 架构。当前聊天前端已经收敛为**极简文本聊天**：只保留文本发送、流式文本渲染、历史加载、连接状态展示和最小审批弹窗。
 
 ## 导航结构
 
@@ -14,48 +14,31 @@ MainScreen
   │
   ├── isSetupCompleted == null  → 空白（加载中）
   ├── isSetupCompleted == false → SetupWizardScreen
-  └── isSetupCompleted == true  → MainContent (底部导航)
+  └── isSetupCompleted == true  → MainContent
                                     │
-                                    ├── NavHost
-                                    │   ├── "chat"     → ChatScreen
-                                    │   ├── "terminal" → TerminalScreen
-                                    │   └── "settings" → SettingsScreen
-                                    │
-                                    └── NavigationBar (3 个 Tab)
-                                        ├── Chat     (💬)
-                                        ├── Terminal  (⌨)
-                                        └── Settings  (⚙)
+                                    └── NavHost
+                                        ├── "chat"     → ChatScreen
+                                        ├── "settings" → SettingsScreen
+                                        └── "terminal" → TerminalScreen
 ```
 
-### 导航路由
-
-`Screen` 枚举定义三个 Tab 路由：
-
-```kotlin
-enum class Screen(val route: String, val title: String, val icon: ImageVector) {
-    CHAT("chat", "Chat", Icons.AutoMirrored.Filled.Chat),
-    TERMINAL("terminal", "Terminal", Icons.Default.Terminal),
-    SETTINGS("settings", "Settings", Icons.Default.Settings),
-}
-```
-
-导航行为：底部 Tab 切换使用 `popUpTo(startDestination) { saveState = true }` + `restoreState = true`，确保每个 Tab 的状态在切换时被保存和恢复。
+说明：
+- `ChatScreen` 是默认入口。
+- `SettingsScreen` 和 `TerminalScreen` 仍保留，但都作为次级页面进入，不再承担聊天页中的复杂功能入口。
+- 不存在聊天页内的命令面板、附件抽屉、语音面板等二级 UI。
 
 ## ViewModel 架构
-
-每个页面有独立的 `@HiltViewModel`，通过 `hiltViewModel()` 在 Composable 中获取。
 
 ```
 ┌──────────────────┐     ┌──────────────────┐
 │   ChatScreen     │     │   ChatViewModel  │
 │   (Composable)   │────►│   (@HiltViewModel)│
 │                  │     │                  │
-│  collectAs-      │     │  messages: SF    │
-│  StateWith-      │     │  isLoading: SF   │
-│  Lifecycle()     │     │  connectionState │
-│                  │     │  pendingApproval  │
-│  sendMessage()───┼────►│  sendMessage()   │
-│  resolveApproval ┼────►│  resolveApproval │
+│ collectAsState-  │     │ messages         │
+│ WithLifecycle()  │     │ isLoading        │
+│                  │     │ connectionState  │
+│ sendMessage() ───┼────►│ sendMessage()    │
+│ resolveApproval ─┼────►│ resolveApproval()│
 └──────────────────┘     └────────┬─────────┘
                                   │
                          ┌────────┴─────────┐
@@ -65,192 +48,110 @@ enum class Screen(val route: String, val title: String, val icon: ImageVector) {
                          │   ChatApi        │
                          │   ApprovalApi    │
                          └──────────────────┘
-
-SF = StateFlow（UI 通过 collectAsStateWithLifecycle 观察）
 ```
 
 ### 数据流规则
 
-1. **单向数据流**：状态只从 ViewModel → UI，用户操作通过方法调用回到 ViewModel
-2. **生命周期感知**：使用 `collectAsStateWithLifecycle()` 收集 Flow，自动在后台停止收集
-3. **惰性初始化**：`ChatApi` 和 `ApprovalApi` 在 ViewModel 构造时创建（不是 Hilt 注入）
+1. **单向数据流**：状态从 `ChatViewModel` 推送到 `ChatScreen`，用户输入再回调到 ViewModel。
+2. **文本优先**：UI 只处理文本消息；Gateway 中出现的图片、文件、工具活动等非文本 payload 一律忽略，不渲染也不在本地状态中聚合。
+3. **审批独立**：`exec.approval.requested` 是唯一保留的非文本交互路径，由独立弹窗处理。
+4. **流式更新**：assistant 占位消息会在 `delta / final / aborted / error` 事件中被逐步更新。
 
-## 各页面详解
+## ChatScreen
 
-### ChatScreen
-
-**状态来源：**
+### 状态来源
 
 | StateFlow | 类型 | 说明 |
 |-----------|------|------|
-| `messages` | `List<ChatMessage>` | 聊天消息列表 |
+| `messages` | `List<ChatMessage>` | 当前聊天消息列表（纯文本） |
 | `connectionState` | `GatewayState` | WebSocket 连接状态 |
+| `processState` | `ProcessManager.ProcessState` | Gateway 进程状态 |
 | `isLoading` | `Boolean` | 是否正在加载历史 |
-| `pendingApproval` | `ApprovalUiRequest?` | 待审批的工具执行请求 |
+| `pendingApproval` | `ApprovalUiRequest?` | 待审批命令 |
+| `activeRunId` | `String?` | 当前活跃 run |
 
-**UI 组成：**
+### UI 组成
 
 ```
 ┌─────────────────────────────────┐
-│ ConnectionStatusBar             │  ← 非 Connected 时显示
-│ (彩色圆点 + 状态文字)             │
+│ TopAppBar                       │
+│  ● 状态点 + OpenClaw + Settings │
 ├─────────────────────────────────┤
 │                                 │
+│  ServiceStartupView             │  ← 未 ready 时显示
+│  或                              │
 │  LazyColumn                     │
-│  ├── MessageBubble (user)   ──►│  ← 右对齐，深蓝色
-│  ├── MessageBubble (assistant) │  ← 左对齐，灰色
-│  ├── MessageBubble (streaming) │  ← 带旋转加载指示器
-│  └── ...                       │
+│   ├── user bubble               │
+│   ├── assistant bubble          │
+│   ├── system bubble             │
+│   └── loading indicator         │
 │                                 │
-│  EmptyState (无消息时)           │
-│  "🦞 Welcome to OpenClaw"       │
+│  EmptyState                     │  ← 无历史时显示简单提示
 │                                 │
 ├─────────────────────────────────┤
-│ [OutlinedTextField          ] [→]│  ← 输入框 + 发送按钮
-│  placeholder: "Message OpenClaw" │
+│ [OutlinedTextField          ] [→]│
 └─────────────────────────────────┘
 
 ┌─ ApprovalDialog ─────────────────┐
-│ Tool Approval Required           │  ← 弹出对话框
-│                                  │
-│ send_email                       │
-│ Send email to user@example.com   │
-│                                  │
-│ [Deny]              [Approve]    │
+│ Approval Required                │
+│ bash                             │
+│ bash -c ls -la (in /root)        │
+│ [Deny]               [Allow]     │
 └──────────────────────────────────┘
 ```
 
-**消息气泡 (MessageBubble) 设计：**
+### 输入策略
 
-| 属性 | 用户消息 | 助手消息 |
-|------|----------|----------|
-| 对齐 | 右对齐 | 左对齐 |
-| 圆角 | 右下角 4dp（其余 16dp） | 左下角 4dp（其余 16dp） |
-| 亮色背景 | `#0D7377` (teal) | `#F0F0F0` (light gray) |
-| 暗色背景 | `#14A3A8` | `#2C2C2E` |
-| 最大宽度 | 80% 屏幕宽度 | 80% 屏幕宽度 |
-| 时间戳 | HH:mm, 右下角 | HH:mm, 右下角 |
+输入框只支持两类内容：
+- 普通文本：直接走 `chat.send`
+- 3 个本地命令：
+  - `/reset`
+  - `/new`（等价于 `/reset`）
+  - `/clear`
 
-**流式消息处理：**
+不会再解析或展示：
+- slash command 建议浮层
+- 命令面板
+- 语音录制
+- 图片/文件附件
+- 工具活动明细
+- 分享 / 删除 / 重试操作
 
-```
-ChatViewModel.handleStreamingChunk(chunk):
-  │
-  ├── 获取/创建 StringBuilder(messageId)
-  ├── buffer.append(chunk.delta)
-  │
-  ├── 消息已存在? → 更新 content = buffer.toString(), isStreaming = !done
-  └── 消息不存在? → 创建新 ASSISTANT 消息, isStreaming = !done
-  
-  ├── done == true → 移除 streamingMessages[messageId]
-```
+## MessageBubble
+
+### 设计原则
+
+- **用户消息**：右对齐，使用 `primaryContainer`
+- **助手 / 系统消息**：左对齐，使用中性色 surface
+- **Markdown**：仅助手/系统消息使用 Markdown 渲染
+- **长按菜单**：只保留 Copy
+- **状态信息**：用户消息底部展示 `Sending` / `Failed`，所有消息展示时间戳
+- **流式状态**：assistant 在 `THINKING` 时展示 `Thinking...`，在响应中显示小型 spinner
+
+### 消息模型
+
+聊天 UI 只依赖以下字段：
+- `role`
+- `contentBlocks`（当前只存 `Text`）
+- `runPhase`
+- `timestamp`
+- `isStreaming`
+- `status`
+- `runId`
+
+## 其他页面
 
 ### TerminalScreen
 
-**核心机制：通过 AndroidView 嵌入 Termux 的 TerminalView**
-
-```
-TerminalScreen
-  │
-  ├── rootfsInstalled == false
-  │   └── 显示 "请先完成安装" 提示
-  │
-  └── rootfsInstalled == true
-      └── EmbeddedTerminalView
-          │
-          └── AndroidView(factory = {
-                  TerminalView(ctx, null).apply {
-                      isFocusable = true
-                      isFocusableInTouchMode = true
-                      viewModel.attachView(this)  ← 关键：绑定 PTY 会话
-                  }
-              })
-```
-
-**TerminalViewModel 职责：**
-
-1. **创建 PTY 会话**：`TerminalSession(shellPath, cwd, args, env, transcriptRows, sessionClient)`
-   - `shellPath` = proot 二进制路径（`libproot.so`）
-   - `args` = proot 参数 + `/usr/bin/bash --login`
-   - `cwd` = filesDir
-   - `env` = proot 环境变量数组
-   - `transcriptRows` = 5000（回滚缓冲区行数）
-
-2. **实现 TerminalSessionClient**：处理文本变更、标题变更、剪贴板、光标样式等回调
-
-3. **实现 TerminalViewClient**：处理缩放手势（字体大小 8-32sp）、键盘事件、长按等
-
-4. **生命周期管理**：`onCleared()` 时 `finishIfRunning()` 终止 shell 进程
-
-### SetupWizardScreen
-
-五步向导，使用 `AnimatedContent` 实现步骤间的动画切换：
-
-```
-WELCOME
-  │ "Get Started"
-  ▼
-DEVICE_CHECK
-  │ 检查 RAM (≥4GB), 存储 (≥3GB), 网络
-  │ "Continue" / "Continue Anyway"
-  ▼
-DOWNLOAD
-  │ 下载 + 解压 Debian rootfs
-  │ 进度条 + MB 计数器
-  ▼
-API_KEY
-  │ 通过 FilterChip 选择 Provider（7个可选）
-  │ 输入对应 Provider 的 API key
-  │ 通过 ExposedDropdownMenu 选择默认模型
-  │ "Save & Continue" / "Skip for Now"
-  ▼
-COMPLETE
-  │ "Start Chatting"
-  │ → preferencesManager.setSetupCompleted(true)
-```
+- 仍通过 `AndroidView` 嵌入 Termux `TerminalView`
+- 与聊天页解耦，不再从 ChatScreen 提供快捷入口
 
 ### SettingsScreen
 
-滚动布局，分为四个卡片段落：
+- 继续负责模型/API key/后台运行等配置
+- 是聊天页右上角唯一保留的扩展入口
 
-| 段落 | 内容 |
-|------|------|
-| Gateway | 状态显示（从 `ProcessManager.processState` 映射为文字）、后台模式开关 |
-| Model | `ExposedDropdownMenu` 列出已配置 key 的 Provider 下所有模型，未配置时提示先填写 API key |
-| API Providers | 7 个 Provider 卡片（Anthropic / OpenAI / Google / OpenRouter / MiniMax / 智谱 GLM / Kimi），每张卡片有密码遮罩的 API key 输入框，实时保存并触发 `configWriter.writeConfig()` |
-| Storage | 环境大小信息（Linux 环境和 OpenClaw 数据） |
-| About | 版本号 (v0.1.0)、许可证 (GPLv3) |
+### SetupWizardScreen
 
-## 主题系统
-
-### 配色方案
-
-| 角色 | 亮色 | 暗色 |
-|------|------|------|
-| Primary | `#0D7377` (深海蓝绿) | `#4DD9DD` |
-| Secondary | `#E85D3A` (暖珊瑚) | `#FFB4A1` |
-| Tertiary | `#7C5CBF` (淡紫) | — |
-| Background | `#F8FAFA` | `#1A1C1E` |
-
-### 动态颜色
-
-在 Android 12+ (API 31) 上自动使用 Material You 动态颜色（从壁纸提取），低版本回退到自定义配色。
-
-### 连接状态指示色
-
-| 状态 | 颜色 | 色值 |
-|------|------|------|
-| Running/Connected | 绿色 | `#4CAF50` |
-| Connecting | 蓝色 | `#42A5F5` |
-| Warning/Reconnecting | 橙色 | `#FFA726` |
-| Error/Disconnected | 红色 | `#E53935` |
-
-## 通用 UI 组件
-
-### ConnectionStatusBar
-
-当 WebSocket 未连接时，在 ChatScreen 顶部显示一个紧凑的状态条：
-
-- 彩色圆点（8dp，根据状态变色，有动画过渡）
-- 状态文字（如 "Connecting...", "Reconnecting...", "Error: timeout"）
-- 连接成功后自动隐藏
+- 首次安装流程不变
+- 完成后进入 `ChatScreen`，但默认只看到极简文本聊天界面

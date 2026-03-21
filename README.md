@@ -3,7 +3,7 @@
 [![Android Build](https://github.com/tangfuhao/Android-Openclaw-Launcher/actions/workflows/android-build.yml/badge.svg)](https://github.com/tangfuhao/Android-Openclaw-Launcher/actions/workflows/android-build.yml)
 [![License: GPLv3](https://img.shields.io/badge/License-GPLv3-blue.svg)](LICENSE)
 
-A **fully self-contained** Android app that runs the complete [OpenClaw](https://openclaw.ai/) AI assistant server (Gateway + Agent) locally on your phone, with a native chat interface and an embedded terminal.
+A **fully self-contained** Android app that runs the complete [OpenClaw](https://openclaw.ai/) AI assistant server (Gateway + Agent) locally on your phone, with a native minimal text chat interface and an embedded terminal.
 
 **No server required. No Termux installation. No root.**
 
@@ -31,7 +31,7 @@ A **fully self-contained** Android app that runs the complete [OpenClaw](https:/
 ```
 
 - **Full Linux environment** — Runs complete Debian via proot; install any package with `apt`
-- **Native chat UI** — Built with Compose; streaming message rendering, tool approval dialogs
+- **Minimal text chat UI** — Built with Compose; text send, streaming Markdown rendering, approval dialogs
 - **Embedded terminal** — Integrates Termux's terminal-view for real PTY bash sessions
 - **Background persistence** — Foreground Service + WakeLock with optional boot autostart
 
@@ -66,7 +66,7 @@ Output: `app/build/outputs/apk/debug/app-debug.apk`
 
 | Feature | Description |
 |---------|-------------|
-| Chat | Streaming AI responses, message bubbles, auto-scroll, history |
+| Chat | Text send, streaming AI responses, Markdown rendering, history |
 | Tool Approval | Confirmation dialog before the agent executes sensitive operations |
 | Terminal | Real PTY terminal with direct access to the embedded Linux environment |
 | Background Mode | Foreground Service keep-alive with optional boot autostart |
@@ -116,7 +116,7 @@ app/src/main/kotlin/com/openclaw/android/
 ├── data/            Data models, DataStore persistence
 ├── di/              Hilt dependency injection
 └── ui/
-    ├── chat/        Chat screen + message bubbles
+    ├── chat/        Minimal text chat screen + message bubbles
     ├── terminal/    Terminal tab (Termux TerminalView)
     ├── settings/    Settings screen
     ├── setup/       First-run setup wizard

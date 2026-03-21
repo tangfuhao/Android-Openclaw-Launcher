@@ -2,7 +2,7 @@
 
 ## 一句话描述
 
-Android OpenClaw 是一个自包含的 Android 应用，内嵌完整 Linux 运行环境，在手机上本地运行 OpenClaw AI Agent Gateway，通过 WebSocket 协议与原生 Compose 聊天界面通信。
+Android OpenClaw 是一个自包含的 Android 应用，内嵌完整 Linux 运行环境，在手机上本地运行 OpenClaw AI Agent Gateway，通过 WebSocket 协议与原生 Compose 极简文本聊天界面通信。
 
 ## 核心架构图
 
@@ -53,7 +53,7 @@ Android OpenClaw 是一个自包含的 Android 应用，内嵌完整 Linux 运�
 
 | 层级 | 职责 | 关键组件 |
 |------|------|----------|
-| **UI 层** | 用户界面渲染与交互 | `ChatScreen`, `TerminalScreen`, `SettingsScreen`, `SetupWizardScreen` |
+| **UI 层** | 用户界面渲染与交互 | `ChatScreen`（极简文本聊天）, `TerminalScreen`, `SettingsScreen`, `SetupWizardScreen` |
 | **ViewModel 层** | 状态管理与业务逻辑 | `ChatViewModel`, `TerminalViewModel`, `SettingsViewModel`, `SetupViewModel` |
 | **Gateway 层** | WebSocket 协议通信 | `GatewayClient`, `ChatApi`, `ApprovalApi`, `GatewayProtocol` |
 | **Service 层** | 后台进程生命周期管理 | `OpenClawService`, `ProcessManager`, `HealthMonitor`, `BootReceiver` |
@@ -84,7 +84,7 @@ Android 10+ (API 29) 引入了 W^X (Write XOR Execute) 限制，禁止从 `/data
 ## 数据流简图
 
 ```
-用户输入
+用户文本输入
   │
   ▼
 ChatScreen (Compose UI)
