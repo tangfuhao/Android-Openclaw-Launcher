@@ -9,11 +9,15 @@ import android.os.StatFs
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.openclaw.android.BuildConfig
+import com.openclaw.android.data.ModelConfig
 import com.openclaw.android.data.PreferencesManager
-import com.openclaw.android.data.PreferencesManager.ApiProvider
+import com.openclaw.android.gateway.ConnectivityResult
+import com.openclaw.android.gateway.ModelConnectivityChecker
 import com.openclaw.android.proot.OpenClawConfigWriter
 import com.openclaw.android.proot.RootfsInstaller
 import com.openclaw.android.proot.RootfsState
+import com.openclaw.android.ui.components.ModelConfigFormState
+import com.openclaw.android.ui.components.toModelConfig
 import dagger.hilt.android.lifecycle.HiltViewModel
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +34,7 @@ class SetupViewModel @Inject constructor(
     private val rootfsInstaller: RootfsInstaller,
     private val preferencesManager: PreferencesManager,
     private val configWriter: OpenClawConfigWriter,
+    private val connectivityChecker: ModelConnectivityChecker,
 ) : ViewModel() {
 
     private val _currentStep = MutableStateFlow(SetupStep.WELCOME)
@@ -39,6 +44,12 @@ class SetupViewModel @Inject constructor(
 
     private val _deviceCheck = MutableStateFlow(DeviceCheck())
     val deviceCheck: StateFlow<DeviceCheck> = _deviceCheck.asStateFlow()
+
+    private val _testResult = MutableStateFlow<String?>(null)
+    val testResult: StateFlow<String?> = _testResult.asStateFlow()
+
+    private val _isTesting = MutableStateFlow(false)
+    val isTesting: StateFlow<Boolean> = _isTesting.asStateFlow()
 
     init {
         checkDevice()
@@ -60,20 +71,35 @@ class SetupViewModel @Inject constructor(
         }
     }
 
-    fun saveProviderConfig(
-        provider: ApiProvider,
-        apiKey: String,
-        model: String = "",
-    ) {
+    fun saveModelConfig(formState: ModelConfigFormState) {
+        val config = formState.toModelConfig()
+        config.validate()?.let {
+            _testResult.value = it
+            return
+        }
         viewModelScope.launch {
-            preferencesManager.setApiKey(provider, apiKey)
-            if (model.isNotBlank()) {
-                preferencesManager.setSelectedModel(model)
-            }
-            withContext(Dispatchers.IO) {
-                configWriter.writeConfig()
-            }
+            preferencesManager.setModelConfig(config)
+            withContext(Dispatchers.IO) { configWriter.writeConfig(config) }
             nextStep()
+        }
+    }
+
+    fun testConnection(formState: ModelConfigFormState) {
+        val config = formState.toModelConfig()
+        config.validate()?.let {
+            _testResult.value = it
+            return
+        }
+        viewModelScope.launch {
+            _isTesting.value = true
+            _testResult.value = null
+            when (val result = connectivityChecker.test(config)) {
+                is ConnectivityResult.Success ->
+                    _testResult.value = "Connected (${result.latencyMs}ms)"
+                is ConnectivityResult.Failure ->
+                    _testResult.value = result.message
+            }
+            _isTesting.value = false
         }
     }
 

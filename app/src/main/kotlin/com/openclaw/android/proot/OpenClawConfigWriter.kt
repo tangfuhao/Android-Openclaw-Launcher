@@ -2,17 +2,17 @@ package com.openclaw.android.proot
 
 import android.util.Log
 import com.openclaw.android.core.OpenClawConstants
+import com.openclaw.android.data.ModelConfig
+import com.openclaw.android.data.ModelProviderEntry
 import com.openclaw.android.data.PreferencesManager
-import com.openclaw.android.data.PreferencesManager.ApiProvider
+import com.openclaw.android.data.ProviderEnvLookup
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 
 /**
  * Generates and writes `openclaw.json` to the rootfs config directory based on
- * the user's provider settings stored in [PreferencesManager].
- *
- * All providers are injected via environment variables, which take highest
- * precedence in OpenClaw's config resolution.
+ * the user's [ModelConfig] stored in [PreferencesManager].
  */
 class OpenClawConfigWriter(
     private val paths: OpenClawConstants.Paths,
@@ -22,38 +22,33 @@ class OpenClawConfigWriter(
         private const val TAG = "OpenClawConfigWriter"
     }
 
-    /**
-     * Writes `openclaw.json` and `auth-profiles.json` to the rootfs config directory.
-     * Should be called from IO dispatcher before gateway starts.
-     */
     fun writeConfig() {
-        val configs = preferencesManager.getProviderConfigsSync()
+        val config = preferencesManager.getModelConfigSync()
+        writeConfig(config)
+    }
 
-        val configJson = buildConfigJson(configs)
+    fun writeConfig(config: ModelConfig) {
+        val configJson = buildConfigJson(config)
         val configFile = File(paths.hostOpenclawConfig, "openclaw.json")
         paths.hostOpenclawConfig.mkdirs()
         configFile.writeText(configJson.toString(2))
         Log.i(TAG, "Wrote openclaw.json to ${configFile.absolutePath}")
 
-        writeAuthProfiles(configs)
+        writeAuthProfiles(config)
     }
 
-    /**
-     * Writes API keys to `auth-profiles.json` in the per-agent directory.
-     * OpenClaw resolves provider credentials from this file.
-     */
-    private fun writeAuthProfiles(configs: Map<ApiProvider, PreferencesManager.ProviderConfig>) {
+    private fun writeAuthProfiles(config: ModelConfig) {
         val agentDir = File(paths.hostOpenclawConfig, "agents/main/agent")
         agentDir.mkdirs()
 
         val profiles = JSONObject()
-        for ((provider, config) in configs) {
-            if (!config.hasApiKey) continue
-            val providerName = providerConfigName(provider)
+        for (entry in config.providers) {
+            if (!entry.hasApiKey) continue
+            val providerName = entry.providerId.lowercase().trim()
             profiles.put(providerName, JSONObject().apply {
                 put("type", "api_key")
                 put("provider", providerName)
-                put("key", config.apiKey)
+                put("key", entry.apiKey)
             })
         }
 
@@ -63,16 +58,25 @@ class OpenClawConfigWriter(
         Log.i(TAG, "Wrote auth-profiles.json with ${profiles.length()} provider(s)")
     }
 
-    private fun buildConfigJson(configs: Map<ApiProvider, PreferencesManager.ProviderConfig>): JSONObject {
+    private fun buildConfigJson(config: ModelConfig): JSONObject {
         val root = JSONObject()
 
         val envBlock = JSONObject()
-        for ((provider, config) in configs) {
-            if (!config.hasApiKey) continue
-            envBlock.put(provider.envVarName, config.apiKey)
+        for (entry in config.providers) {
+            if (!entry.hasApiKey || entry.isCustom) continue
+            val envVar = ProviderEnvLookup.envVarName(entry.providerId) ?: continue
+            envBlock.put(envVar, entry.apiKey)
         }
         if (envBlock.length() > 0) {
             root.put("env", envBlock)
+        }
+
+        val customProviders = buildCustomProvidersBlock(config.providers)
+        if (customProviders.length() > 0) {
+            root.put("models", JSONObject().apply {
+                put("mode", "merge")
+                put("providers", customProviders)
+            })
         }
 
         root.put("gateway", JSONObject().apply { put("mode", "local") })
@@ -81,11 +85,10 @@ class OpenClawConfigWriter(
             put("queue", JSONObject().apply { put("mode", "steer") })
         })
 
-        val selectedModel = preferencesManager.getSelectedModelSync()
-        if (selectedModel.isNotBlank()) {
+        if (config.primaryModel.isNotBlank()) {
             root.put("agents", JSONObject().apply {
                 put("defaults", JSONObject().apply {
-                    put("model", JSONObject().apply { put("primary", selectedModel) })
+                    put("model", JSONObject().apply { put("primary", config.primaryModel) })
                 })
             })
         }
@@ -93,27 +96,52 @@ class OpenClawConfigWriter(
         return root
     }
 
-    /**
-     * Returns the environment variables map for API keys.
-     */
-    fun getApiKeyEnvVars(): Map<String, String> {
-        val configs = preferencesManager.getProviderConfigsSync()
-        return buildMap {
-            for ((provider, config) in configs) {
-                if (!config.hasApiKey) continue
-                put(provider.envVarName, config.apiKey)
+    private fun buildCustomProvidersBlock(entries: List<ModelProviderEntry>): JSONObject {
+        val providers = JSONObject()
+        val grouped = entries.filter { it.isCustom && it.hasApiKey }
+            .groupBy { it.providerId.lowercase().trim() }
+
+        for ((providerId, group) in grouped) {
+            val first = group.first()
+            val modelsArray = JSONArray()
+            for (entry in group) {
+                modelsArray.put(buildModelDefinition(entry))
             }
+            providers.put(providerId, JSONObject().apply {
+                put("baseUrl", first.baseUrl.trim().trimEnd('/'))
+                put("apiKey", first.apiKey)
+                put("api", first.apiType)
+                put("models", modelsArray)
+            })
+        }
+        return providers
+    }
+
+    private fun buildModelDefinition(entry: ModelProviderEntry): JSONObject {
+        return JSONObject().apply {
+            put("id", entry.modelId)
+            put("name", entry.modelId)
+            put("reasoning", false)
+            put("input", JSONArray().put("text"))
+            put("cost", JSONObject().apply {
+                put("input", 0)
+                put("output", 0)
+                put("cacheRead", 0)
+                put("cacheWrite", 0)
+            })
+            put("contextWindow", 128_000)
+            put("maxTokens", 32_000)
         }
     }
 
-    /** Maps [ApiProvider] to the provider name used in OpenClaw config files. */
-    private fun providerConfigName(provider: ApiProvider): String = when (provider) {
-        ApiProvider.ANTHROPIC -> "anthropic"
-        ApiProvider.OPENAI -> "openai"
-        ApiProvider.GOOGLE -> "google"
-        ApiProvider.OPENROUTER -> "openrouter"
-        ApiProvider.MINIMAX_CN -> "minimax-cn"
-        ApiProvider.ZAI -> "zai"
-        ApiProvider.KIMI_CODING -> "kimi-coding"
+    fun getApiKeyEnvVars(): Map<String, String> {
+        val config = preferencesManager.getModelConfigSync()
+        return buildMap {
+            for (entry in config.providers) {
+                if (!entry.hasApiKey || entry.isCustom) continue
+                val envVar = ProviderEnvLookup.envVarName(entry.providerId) ?: continue
+                put(envVar, entry.apiKey)
+            }
+        }
     }
 }

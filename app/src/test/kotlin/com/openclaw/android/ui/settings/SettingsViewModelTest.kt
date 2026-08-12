@@ -1,9 +1,15 @@
 package com.openclaw.android.ui.settings
 
+import com.openclaw.android.data.ModelConfig
+import com.openclaw.android.data.ModelProviderEntry
 import com.openclaw.android.data.PreferencesManager
-import com.openclaw.android.data.PreferencesManager.ApiProvider
+import com.openclaw.android.gateway.ConnectivityResult
+import com.openclaw.android.gateway.ModelConnectivityChecker
 import com.openclaw.android.proot.OpenClawConfigWriter
 import com.openclaw.android.service.ProcessManager
+import com.openclaw.android.ui.components.ModelConfigFormState
+import com.openclaw.android.ui.components.toModelConfig
+import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
 import io.mockk.mockk
@@ -20,7 +26,6 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 
@@ -32,6 +37,7 @@ class SettingsViewModelTest {
     private lateinit var preferencesManager: PreferencesManager
     private lateinit var processManager: ProcessManager
     private lateinit var configWriter: OpenClawConfigWriter
+    private lateinit var connectivityChecker: ModelConnectivityChecker
     private lateinit var viewModel: SettingsViewModel
 
     @Before
@@ -41,14 +47,18 @@ class SettingsViewModelTest {
         preferencesManager = mockk(relaxed = true)
         processManager = mockk()
         configWriter = mockk(relaxed = true)
+        connectivityChecker = mockk()
 
         every { processManager.processState } returns MutableStateFlow(ProcessManager.ProcessState.Stopped)
         every { preferencesManager.isBackgroundEnabled } returns flowOf(true)
-        every { preferencesManager.allApiKeys } returns flowOf(
-            ApiProvider.entries.associateWith { "" }
-        )
+        every { preferencesManager.modelConfig } returns flowOf(ModelConfig.Empty)
 
-        viewModel = SettingsViewModel(preferencesManager, processManager, configWriter)
+        viewModel = SettingsViewModel(
+            preferencesManager,
+            processManager,
+            configWriter,
+            connectivityChecker,
+        )
     }
 
     @After
@@ -62,51 +72,60 @@ class SettingsViewModelTest {
     }
 
     @Test
-    fun `initial backgroundEnabled is true`() = runTest {
+    fun `saveModelConfig validates and persists`() = runTest {
+        val form = ModelConfigFormState(
+            primaryModel = "anthropic/claude-sonnet",
+            providers = listOf(
+                ModelProviderEntry(
+                    providerId = "anthropic",
+                    apiKey = "sk-test",
+                    modelId = "claude-sonnet",
+                ),
+            ),
+        )
+
+        viewModel.saveModelConfig(form)
         advanceUntilIdle()
-        assertEquals(true, viewModel.backgroundEnabled.value)
+
+        coVerify { preferencesManager.setModelConfig(form.toModelConfig()) }
+        verify { configWriter.writeConfig(form.toModelConfig()) }
     }
 
     @Test
-    fun `initial API keys are empty`() = runTest {
+    fun `testConnection reports success`() = runTest {
+        coEvery { connectivityChecker.test(any()) } returns ConnectivityResult.Success(120)
+
+        val form = ModelConfigFormState(
+            primaryModel = "openai/gpt-4",
+            providers = listOf(
+                ModelProviderEntry(providerId = "openai", apiKey = "sk", modelId = "gpt-4"),
+            ),
+        )
+
+        viewModel.testConnection(form)
         advanceUntilIdle()
-        val keys = viewModel.apiKeys.value
-        ApiProvider.entries.forEach { provider ->
-            assertEquals("", keys[provider] ?: "")
-        }
+
+        assertEquals(
+            "Connected (120ms). API reachable; Agent tool support may vary.",
+            viewModel.testResult.value,
+        )
     }
 
     @Test
-    fun `setBackgroundEnabled delegates to PreferencesManager`() = runTest {
-        viewModel.setBackgroundEnabled(false)
+    fun `testConnection reports failure`() = runTest {
+        coEvery { connectivityChecker.test(any()) } returns ConnectivityResult.Failure("HTTP 401")
+
+        val form = ModelConfigFormState(
+            primaryModel = "openai/gpt-4",
+            providers = listOf(
+                ModelProviderEntry(providerId = "openai", apiKey = "bad", modelId = "gpt-4"),
+            ),
+        )
+
+        viewModel.testConnection(form)
         advanceUntilIdle()
 
-        coVerify { preferencesManager.setBackgroundEnabled(false) }
-    }
-
-    @Test
-    fun `saveProviderConfig saves apiKey`() = runTest {
-        viewModel.saveProviderConfig(ApiProvider.ANTHROPIC, apiKey = "sk-test")
-        advanceUntilIdle()
-
-        coVerify { preferencesManager.setApiKey(ApiProvider.ANTHROPIC, "sk-test") }
-    }
-
-    @Test
-    fun `saveProviderConfig saves CN provider apiKey`() = runTest {
-        viewModel.saveProviderConfig(ApiProvider.MINIMAX_CN, apiKey = "cn-key")
-        advanceUntilIdle()
-
-        coVerify { preferencesManager.setApiKey(ApiProvider.MINIMAX_CN, "cn-key") }
-    }
-
-    @Test
-    fun `saveProviderConfig calls configWriter writeConfig`() = runTest {
-        viewModel.saveProviderConfig(ApiProvider.ANTHROPIC, apiKey = "k")
-        advanceUntilIdle()
-        Thread.sleep(100)
-
-        verify(timeout = 1000) { configWriter.writeConfig() }
+        assertEquals("HTTP 401", viewModel.testResult.value)
     }
 
     @Test
@@ -114,7 +133,7 @@ class SettingsViewModelTest {
         val stateFlow = MutableStateFlow<ProcessManager.ProcessState>(ProcessManager.ProcessState.Running)
         every { processManager.processState } returns stateFlow
 
-        val vm = SettingsViewModel(preferencesManager, processManager, configWriter)
+        val vm = SettingsViewModel(preferencesManager, processManager, configWriter, connectivityChecker)
 
         val job = launch(kotlinx.coroutines.test.UnconfinedTestDispatcher(testScheduler)) {
             vm.processState.collect {}

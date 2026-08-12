@@ -3,8 +3,6 @@ package com.openclaw.android.ui.setup
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -15,21 +13,14 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ExposedDropdownMenuBox
-import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.MenuAnchorType
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -37,8 +28,10 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.openclaw.android.data.PreferencesManager.ApiProvider
+import com.openclaw.android.data.ModelProviderEntry
 import com.openclaw.android.proot.RootfsState
+import com.openclaw.android.ui.components.ModelConfigForm
+import com.openclaw.android.ui.components.ModelConfigFormState
 
 @Composable
 fun SetupWizardScreen(
@@ -224,17 +217,17 @@ private fun DownloadPage(rootfsState: RootfsState, viewModel: SetupViewModel) {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun ApiKeyPage(viewModel: SetupViewModel) {
-    var selectedProvider by rememberSaveable { mutableStateOf(ApiProvider.ANTHROPIC.name) }
-    var apiKey by rememberSaveable { mutableStateOf("") }
-    var selectedModel by rememberSaveable { mutableStateOf("") }
-    var modelDropdownExpanded by rememberSaveable { mutableStateOf(false) }
-
-    val provider = ApiProvider.valueOf(selectedProvider)
-    val models = provider.availableModels
-    val currentModel = selectedModel.ifBlank { provider.defaultModel }
+    val testResult by viewModel.testResult.collectAsStateWithLifecycle()
+    val isTesting by viewModel.isTesting.collectAsStateWithLifecycle()
+    var formState by remember {
+        mutableStateOf(
+            ModelConfigFormState(
+                providers = listOf(ModelProviderEntry()),
+            ),
+        )
+    }
 
     Column(
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -242,99 +235,31 @@ private fun ApiKeyPage(viewModel: SetupViewModel) {
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(top = 48.dp),
+            .padding(top = 24.dp),
     ) {
         Text(
-            text = "Configure AI Provider",
+            text = "Model Configuration",
             style = MaterialTheme.typography.headlineMedium,
         )
         Spacer(modifier = Modifier.height(12.dp))
         Text(
-            text = "Enter at least one API key to get started.\nYou can add more later in Settings.",
+            text = "Configure provider/model directly. You can change this later in Settings.",
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Spacer(modifier = Modifier.height(24.dp))
 
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            ApiProvider.entries.forEach { p ->
-                FilterChip(
-                    selected = provider == p,
-                    onClick = {
-                        selectedProvider = p.name
-                        apiKey = ""
-                        selectedModel = ""
-                    },
-                    label = { Text(p.displayName) },
-                )
-            }
-        }
-
-        Spacer(modifier = Modifier.height(24.dp))
-
-        OutlinedTextField(
-            value = apiKey,
-            onValueChange = { apiKey = it },
-            label = { Text("API Key") },
-            placeholder = { Text(provider.keyHint) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
+        ModelConfigForm(
+            state = formState,
+            onStateChange = { formState = it },
+            testResult = testResult,
+            isTesting = isTesting,
+            onSave = { viewModel.saveModelConfig(formState) },
+            onTest = { viewModel.testConnection(formState) },
+            showSaveHint = false,
         )
 
-        Spacer(modifier = Modifier.height(16.dp))
-
-        ExposedDropdownMenuBox(
-            expanded = modelDropdownExpanded,
-            onExpandedChange = { modelDropdownExpanded = it },
-            modifier = Modifier.fillMaxWidth(),
-        ) {
-            val displayText = models.firstOrNull { it.id == currentModel }?.displayName
-                ?: currentModel
-            OutlinedTextField(
-                value = displayText,
-                onValueChange = {},
-                readOnly = true,
-                label = { Text("Model") },
-                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(modelDropdownExpanded) },
-                modifier = Modifier
-                    .menuAnchor(MenuAnchorType.PrimaryNotEditable)
-                    .fillMaxWidth(),
-            )
-            ExposedDropdownMenu(
-                expanded = modelDropdownExpanded,
-                onDismissRequest = { modelDropdownExpanded = false },
-            ) {
-                models.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(option.displayName) },
-                        onClick = {
-                            selectedModel = option.id
-                            modelDropdownExpanded = false
-                        },
-                    )
-                }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(32.dp))
-
-        Button(
-            onClick = {
-                viewModel.saveProviderConfig(
-                    provider = provider,
-                    apiKey = apiKey,
-                    model = currentModel,
-                )
-            },
-            modifier = Modifier.fillMaxWidth(0.6f),
-            enabled = apiKey.isNotBlank(),
-        ) {
-            Text("Save & Continue")
-        }
         Spacer(modifier = Modifier.height(12.dp))
         OutlinedButton(
             onClick = { viewModel.nextStep() },

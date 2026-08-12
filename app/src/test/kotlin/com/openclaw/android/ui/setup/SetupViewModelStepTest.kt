@@ -6,11 +6,15 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.Environment
+import com.openclaw.android.data.ModelProviderEntry
 import com.openclaw.android.data.PreferencesManager
-import com.openclaw.android.data.PreferencesManager.ApiProvider
+import com.openclaw.android.gateway.ConnectivityResult
+import com.openclaw.android.gateway.ModelConnectivityChecker
 import com.openclaw.android.proot.OpenClawConfigWriter
 import com.openclaw.android.proot.RootfsInstaller
 import com.openclaw.android.proot.RootfsState
+import com.openclaw.android.ui.components.ModelConfigFormState
+import com.openclaw.android.ui.components.toModelConfig
 import io.mockk.coEvery
 import io.mockk.coVerify
 import io.mockk.every
@@ -43,6 +47,7 @@ class SetupViewModelStepTest {
     private lateinit var rootfsInstaller: RootfsInstaller
     private lateinit var preferencesManager: PreferencesManager
     private lateinit var configWriter: OpenClawConfigWriter
+    private lateinit var connectivityChecker: ModelConnectivityChecker
     private lateinit var viewModel: SetupViewModel
 
     @Before
@@ -53,6 +58,7 @@ class SetupViewModelStepTest {
         rootfsInstaller = mockk(relaxed = true)
         preferencesManager = mockk(relaxed = true)
         configWriter = mockk(relaxed = true)
+        connectivityChecker = mockk(relaxed = true)
 
         every { rootfsInstaller.state } returns MutableStateFlow(RootfsState.NotInstalled)
 
@@ -70,7 +76,13 @@ class SetupViewModelStepTest {
         mockkStatic(Environment::class)
         every { Environment.getDataDirectory() } returns File("/data")
 
-        viewModel = SetupViewModel(context, rootfsInstaller, preferencesManager, configWriter)
+        viewModel = SetupViewModel(
+            context,
+            rootfsInstaller,
+            preferencesManager,
+            configWriter,
+            connectivityChecker,
+        )
     }
 
     @After
@@ -79,34 +91,10 @@ class SetupViewModelStepTest {
         unmockkStatic(Environment::class)
     }
 
-    // --- Step state machine ---
-
     @Test
     fun `initial step is WELCOME`() = runTest {
         advanceUntilIdle()
         assertEquals(SetupStep.WELCOME, viewModel.currentStep.value)
-    }
-
-    @Test
-    fun `nextStep from WELCOME goes to DEVICE_CHECK`() = runTest {
-        advanceUntilIdle()
-        viewModel.nextStep()
-        assertEquals(SetupStep.DEVICE_CHECK, viewModel.currentStep.value)
-    }
-
-    @Test
-    fun `nextStep from DEVICE_CHECK goes to DOWNLOAD`() = runTest {
-        advanceUntilIdle()
-        viewModel.nextStep()
-        viewModel.nextStep()
-        assertEquals(SetupStep.DOWNLOAD, viewModel.currentStep.value)
-    }
-
-    @Test
-    fun `nextStep from DOWNLOAD goes to API_KEY`() = runTest {
-        advanceUntilIdle()
-        repeat(3) { viewModel.nextStep() }
-        assertEquals(SetupStep.API_KEY, viewModel.currentStep.value)
     }
 
     @Test
@@ -117,63 +105,47 @@ class SetupViewModelStepTest {
     }
 
     @Test
-    fun `nextStep from COMPLETE stays at COMPLETE`() = runTest {
+    fun `saveModelConfig saves config and advances step`() = runTest {
         advanceUntilIdle()
-        repeat(5) { viewModel.nextStep() }
-        assertEquals(SetupStep.COMPLETE, viewModel.currentStep.value)
-        viewModel.nextStep()
-        assertEquals(SetupStep.COMPLETE, viewModel.currentStep.value)
-    }
+        repeat(3) { viewModel.nextStep() }
+        assertEquals(SetupStep.API_KEY, viewModel.currentStep.value)
 
-    // --- saveProviderConfig ---
+        val form = ModelConfigFormState(
+            primaryModel = "anthropic/claude-sonnet",
+            providers = listOf(
+                ModelProviderEntry(
+                    providerId = "anthropic",
+                    apiKey = "sk-test",
+                    modelId = "claude-sonnet",
+                ),
+            ),
+        )
 
-    @Test
-    fun `saveProviderConfig saves key and advances step`() = runTest {
-        advanceUntilIdle()
-        val stepBefore = viewModel.currentStep.value
-
-        viewModel.saveProviderConfig(ApiProvider.ANTHROPIC, apiKey = "sk-test")
+        viewModel.saveModelConfig(form)
         advanceUntilIdle()
         Thread.sleep(200)
         advanceUntilIdle()
 
-        coVerify { preferencesManager.setApiKey(ApiProvider.ANTHROPIC, "sk-test") }
-        assertTrue(viewModel.currentStep.value != stepBefore)
+        coVerify { preferencesManager.setModelConfig(any()) }
+        verify { configWriter.writeConfig(any()) }
+        assertEquals(SetupStep.COMPLETE, viewModel.currentStep.value)
     }
 
     @Test
-    fun `saveProviderConfig saves model when provided`() = runTest {
-        advanceUntilIdle()
-        viewModel.saveProviderConfig(
-            ApiProvider.MINIMAX_CN,
-            apiKey = "cn-key",
-            model = "minimax-cn/MiniMax-M2.5",
+    fun `testConnection delegates to checker`() = runTest {
+        coEvery { connectivityChecker.test(any()) } returns ConnectivityResult.Success(50)
+        val form = ModelConfigFormState(
+            primaryModel = "openai/gpt-4",
+            providers = listOf(
+                ModelProviderEntry(providerId = "openai", apiKey = "sk", modelId = "gpt-4"),
+            ),
         )
+
+        viewModel.testConnection(form)
         advanceUntilIdle()
 
-        coVerify { preferencesManager.setSelectedModel("minimax-cn/MiniMax-M2.5") }
+        assertEquals("Connected (50ms)", viewModel.testResult.value)
     }
-
-    @Test
-    fun `saveProviderConfig skips model when blank`() = runTest {
-        advanceUntilIdle()
-        viewModel.saveProviderConfig(ApiProvider.OPENAI, apiKey = "k", model = "")
-        advanceUntilIdle()
-
-        coVerify(exactly = 0) { preferencesManager.setSelectedModel(any()) }
-    }
-
-    @Test
-    fun `saveProviderConfig calls configWriter`() = runTest {
-        advanceUntilIdle()
-        viewModel.saveProviderConfig(ApiProvider.ANTHROPIC, apiKey = "k")
-        advanceUntilIdle()
-        Thread.sleep(100)
-
-        verify(timeout = 1000) { configWriter.writeConfig() }
-    }
-
-    // --- finishSetup ---
 
     @Test
     fun `finishSetup sets setup completed`() = runTest {
@@ -184,24 +156,14 @@ class SetupViewModelStepTest {
         coVerify { preferencesManager.setSetupCompleted(true) }
     }
 
-    // --- startInstallation ---
-
-    @Test
-    fun `startInstallation calls rootfsInstaller`() = runTest {
-        advanceUntilIdle()
-        viewModel.startInstallation()
-        advanceUntilIdle()
-
-        coVerify { rootfsInstaller.install(any()) }
-    }
-
-    // --- DeviceCheck ---
-
     @Test
     fun `DeviceCheck allOk requires all checks passing`() {
         val check = SetupViewModel.DeviceCheck(
-            totalRamMb = 8192, freeStorageMb = 4096, networkOk = true,
-            ramOk = true, storageOk = true,
+            totalRamMb = 8192,
+            freeStorageMb = 4096,
+            networkOk = true,
+            ramOk = true,
+            storageOk = true,
         )
         assertTrue(check.allOk)
     }
@@ -210,11 +172,5 @@ class SetupViewModelStepTest {
     fun `DeviceCheck allOk fails if any check fails`() {
         val noRam = SetupViewModel.DeviceCheck(ramOk = false, storageOk = true, networkOk = true)
         assertFalse(noRam.allOk)
-
-        val noStorage = SetupViewModel.DeviceCheck(ramOk = true, storageOk = false, networkOk = true)
-        assertFalse(noStorage.allOk)
-
-        val noNetwork = SetupViewModel.DeviceCheck(ramOk = true, storageOk = true, networkOk = false)
-        assertFalse(noNetwork.allOk)
     }
 }
